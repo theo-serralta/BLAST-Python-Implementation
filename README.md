@@ -7,3 +7,20 @@ BLAST-Python-Implementation is a Python implementation of the Basic Local Alignm
 git clone https://github.com/theo-serralta/BLAST-Python-Implementation.git
 cd BLAST-Python-Implementation
 ```
+
+## Install dependencies
+
+### Conda environment
+
+Install [conda](https://docs.conda.io/en/latest/miniconda.html).
+
+Create conda environment and install dependendies:
+```bash
+conda env create -f blast_python.yml 
+```
+
+Load conda environment:
+
+```bash
+conda activate blast_python
+```
