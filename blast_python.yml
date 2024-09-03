@@ -4,6 +4,9 @@ channels:
     - bioconda
     - nodefaults
 dependencies:
+    - python
     - fastqc
     - samtools=1.9
     - numpy
+    - pandas
+    - Biopython
