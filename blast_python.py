@@ -1,64 +1,65 @@
-###Partie code recherche MSP (Maximal segment pai)
-def similarity_score(residue1, residue2, scoring_matrix):
-    return scoring_matrix.get((residue1, residue2), 0)
+#Etape 1 : Recherche des mots dans les séquences protéiques
 
-def find_wmer_hits(sequence1, sequence2, w, scoring_matrix, threshold):
-    hits = []
-    for i in range(len(sequence1) - w + 1):
-        wmer1 = sequence1[i:i+w]
-        for j in range(len(sequence2) - w + 1):
-            wmer2 = sequence2[j:j+w]
-            score = sum(similarity_score(wmer1[k], wmer2[k], scoring_matrix) for k in range(w))
-            if score >= threshold:
-                hits.append((i, j, score))
-    return hits
+def extract_kmers(sequence, k):
+    kmers = []
+    for i in range(len(sequence) - k + 1):
+        kmer = sequence[i:i+k]
+        kmers.append(kmer)
+    return kmers
 
-def extend_hit(sequence1, sequence2, start1, start2, scoring_matrix, dropoff):
-    max_score = 0
-    current_score = 0
-    best_coords = (start1, start1, start2, start2)
+def find_kmer_positions(kmers, target_sequence):
+    positions = {}
+    for kmer in kmers:
+        positions[kmer] = []
+        start = 0
+        while True:
+            pos = target_sequence.find(kmer, start)
+            if pos == -1:  # Si le k-mer n'est plus trouvé, on arrête la recherche
+                break
+            positions[kmer].append(pos)
+            start = pos + 1  # On continue la recherche après la position trouvée
+    return positions
 
-    # Extend to the right
-    i = start1
-    j = start2
-    while i < len(sequence1) and j < len(sequence2):
-        current_score += similarity_score(sequence1[i], sequence2[j], scoring_matrix)
-        if current_score > max_score:
-            max_score = current_score
-            best_coords = (start1, i+1, start2, j+1)
-        elif max_score - current_score > dropoff:
-            break
-        i += 1
-        j += 1
-
-    return best_coords, max_score
-
-def find_msp(sequence1, sequence2, scoring_matrix, w=4, threshold=10, dropoff=20):
-    hits = find_wmer_hits(sequence1, sequence2, w, scoring_matrix, threshold)
-    max_msp = None
-    max_score = float('-inf')
-
-    for hit in hits:
-        start1, start2, hit_score = hit
-        msp, msp_score = extend_hit(sequence1, sequence2, start1, start2, scoring_matrix, dropoff)
-        if msp_score > max_score:
-            max_score = msp_score
-            max_msp = msp
-
-    return max_msp, max_score
+def find_double_hits(kmer_positions, max_distance):
+    double_hits = []
+    kmer_list = list(kmer_positions.items())
+    
+    for i in range(len(kmer_list)):
+        kmer1, positions1 = kmer_list[i]
+        for pos1 in positions1:
+            for j in range(i+1, len(kmer_list)):
+                kmer2, positions2 = kmer_list[j]
+                for pos2 in positions2:
+                    if abs(pos2 - pos1) <= max_distance:
+                        double_hits.append((kmer1, pos1, kmer2, pos2))
+    return double_hits
 
 
+if __name__ == "__main__":
+    # Séquence query
+    query_sequence = "MKVYLGI"
 
+    # Séquences cibles (par exemple dans une base de données)
+    target_sequences = [
+        "ATGMKVYLGIYQWER",
+        "MKVYLLVYLGIMKVG"
+    ]
 
-scoring_matrix = {
-    ('A', 'A'): 5, ('A', 'C'): -4, ('A', 'G'): -4, ('A', 'T'): -4,
-    ('C', 'A'): -4, ('C', 'C'): 5, ('C', 'G'): -4, ('C', 'T'): -4,
-    ('G', 'A'): -4, ('G', 'C'): -4, ('G', 'G'): 5, ('G', 'T'): -4,
-    ('T', 'A'): -4, ('T', 'C'): -4, ('T', 'G'):-4, ('T', 'T'):5
-}
+    # Longueur du k-mer
+    k = 3
 
-sequence1 = "ACTGA"
-sequence2 = "GACTG"
+    # Distance maximale entre les double-hits
+    max_distance = 5
 
-msp, max_score = find_msp(sequence1, sequence2, scoring_matrix)
-print(f"MSP: {msp}, Score: {max_score}")
+    # Extraire les k-mers de la séquence query
+    kmers = extract_kmers(query_sequence, k)
+    print(f"K-mers extraits de la séquence query: {kmers}")
+
+    # Pour chaque séquence cible, trouver les positions des k-mers
+    for i, target in enumerate(target_sequences):
+        positions = find_kmer_positions(kmers, target)
+        print(f"\nPositions des k-mers dans la séquence cible {i + 1}: {positions}")
+        
+        # Détecter les double-hits
+        double_hits = find_double_hits(positions, max_distance)
+        print(f"Double-hits détectés dans la séquence cible {i + 1}: {double_hits}")
