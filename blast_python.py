@@ -1,4 +1,5 @@
 import math
+import numpy as np
 from Bio import SeqIO
 from Bio.SubsMat import MatrixInfo
 
@@ -137,7 +138,7 @@ def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
 def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
                      gap_open_penalty=-11, gap_extension_penalty=-2):
     """
-    Extends a double-hit into an alignment with gap penalties.
+    Extends a double-hit into an alignment, using Smith-Waterman for local alignment with gap handling.
 
     Args:
         seq_query (str): Query sequence.
@@ -151,28 +152,71 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
     Returns:
         tuple: The alignment score and the alignment itself as a list of tuples.
     """
-    score = 0
-    alignment = []
 
-    # Extend to the left
-    left_score, left_alignment = extend_direction(seq_query, seq_target, query_pos - 1, target_pos - 1, 
-                                                  blosum_matrix, gap_open_penalty, gap_extension_penalty, direction='left')
+    m, n = len(seq_query), len(seq_target)
     
-    # Extend to the right
-    right_score, right_alignment = extend_direction(seq_query, seq_target, query_pos, target_pos, 
-                                                    blosum_matrix, gap_open_penalty, gap_extension_penalty, direction='right')
+    # Initialize score and traceback matrices
+    score_matrix = np.zeros((m + 1, n + 1))
+    traceback_matrix = np.zeros((m + 1, n + 1), dtype=int)
     
-    # Combine scores and alignments
-    score = left_score + right_score
-    alignment = left_alignment[::-1] + right_alignment  # Reverse the left alignment and combine with right
-    
-    return score, alignment
+    max_score = 0
+    max_pos = (0, 0)
+
+    # Fill the score matrix using Smith-Waterman logic
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            match = score_matrix[i - 1][j - 1] + get_blosum62_score(seq_query[i - 1], seq_target[j - 1], blosum_matrix)
+            gap_query = score_matrix[i][j - 1] + (gap_extension_penalty if traceback_matrix[i][j - 1] == 2 else gap_open_penalty)
+            gap_target = score_matrix[i - 1][j] + (gap_extension_penalty if traceback_matrix[i - 1][j] == 1 else gap_open_penalty)
+
+            best_score = max(0, match, gap_query, gap_target)
+            score_matrix[i][j] = best_score
+
+            if best_score == match:
+                traceback_matrix[i][j] = 0  # Diagonal (match/mismatch)
+            elif best_score == gap_query:
+                traceback_matrix[i][j] = 2  # Left (gap in query)
+            elif best_score == gap_target:
+                traceback_matrix[i][j] = 1  # Up (gap in target)
+
+            if best_score > max_score:
+                max_score = best_score
+                max_pos = (i, j)
+
+    # Traceback to recover the alignment
+    aligned_query, aligned_target = [], []
+    i, j = max_pos
+
+    while score_matrix[i][j] > 0:
+        if traceback_matrix[i][j] == 0:
+            aligned_query.append(seq_query[i - 1])
+            aligned_target.append(seq_target[j - 1])
+            i -= 1
+            j -= 1
+        elif traceback_matrix[i][j] == 1:
+            aligned_query.append(seq_query[i - 1])
+            aligned_target.append('-')
+            i -= 1
+        elif traceback_matrix[i][j] == 2:
+            aligned_query.append('-')
+            aligned_target.append(seq_target[j - 1])
+            j -= 1
+
+    # Since traceback traverses in reverse, we need to reverse the results
+    aligned_query = aligned_query[::-1]
+    aligned_target = aligned_target[::-1]
+
+    # Combine the results into a final alignment
+    final_alignment = list(zip(aligned_query, aligned_target))
+
+    return max_score, final_alignment
+
 
 # Extend an alignment in one direction (left or right)
 def extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
                      gap_open_penalty=-11, gap_extension_penalty=-2, direction='right', max_dropoff=10):
     """
-    Extends an alignment in a given direction, considering gap penalties.
+    Extends an alignment in a given direction, considering gap penalties and allowing for gaps.
 
     Args:
         seq_query (str): Query sequence.
@@ -197,60 +241,79 @@ def extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix
     gap_opened_in_target = False
 
     while i >= 0 and j >= 0 and i < len(seq_query) and j < len(seq_target):
+        # Scenario 1: No gap, match/mismatch
         match_score = get_blosum62_score(seq_query[i], seq_target[j], blosum_matrix)
+        match_alignment = [(seq_query[i], seq_target[j])]
         
-        # If match score is below the gap opening penalty, consider a gap
-        if match_score <= gap_open_penalty:
-            if gap_opened_in_query or gap_opened_in_target:
-                score += gap_extension_penalty  # Gap extension
-            else:
-                score += gap_open_penalty  # Gap opening
-                gap_opened_in_query = True
-                gap_opened_in_target = True
-            alignment.append(('-', seq_target[j]) if seq_query[i] == '-' else (seq_query[i], '-'))
-        else:
-            alignment.append((seq_query[i], seq_target[j]))
-            score += match_score
+        # Scenario 2: Insert a gap in the query (skip one character in target)
+        gap_in_query_score = gap_open_penalty if not gap_opened_in_query else gap_extension_penalty
+        gap_in_query_alignment = [('-', seq_target[j])]
+
+        # Scenario 3: Insert a gap in the target (skip one character in query)
+        gap_in_target_score = gap_open_penalty if not gap_opened_in_target else gap_extension_penalty
+        gap_in_target_alignment = [(seq_query[i], '-')]
+
+        # Calculate total scores for the three options
+        option_scores = [
+            (score + match_score, match_alignment),  # No gap (match/mismatch)
+            (score + gap_in_query_score, gap_in_query_alignment),  # Gap in query
+            (score + gap_in_target_score, gap_in_target_alignment)  # Gap in target
+        ]
+        
+        # Choose the best option with the highest score
+        best_option = max(option_scores, key=lambda x: x[0])
+
+        # Update the score and alignment with the best option
+        score = best_option[0]
+        alignment.extend(best_option[1])
+
+        # Adjust gap flags based on the chosen option
+        if best_option == option_scores[1]:  # Gap in query
+            gap_opened_in_query = True
+            gap_opened_in_target = False
+            i -= 1  # Move only in target, keep query at the same position
+        elif best_option == option_scores[2]:  # Gap in target
+            gap_opened_in_query = False
+            gap_opened_in_target = True
+            j -= 1  # Move only in query, keep target at the same position
+        else:  # Match or mismatch
             gap_opened_in_query = False
             gap_opened_in_target = False
-        
-        current_score += match_score
+            i += 1  # Move both query and target forward
+            j += 1
+
+        current_score = score
 
         if current_score < -max_dropoff:
             break
 
-        # Increment i and j after processing the positions
-        if direction == 'left':
-            i -= 1
-            j -= 1
-        else:  # direction 'right'
-            i += 1
-            j += 1
-
     return score, alignment
 
+
 # Filter alignments by score
-def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, threshold=-30):
+def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, bit_score_threshold):
     """
-    Filters and extends alignments based on the detected double-hits.
+    Filtre et étend les alignements basés sur les double-hits détectés, avec un seuil basé sur le bit score.
 
     Args:
-        double_hits (list): List of detected double-hits.
-        seq_query (str): Query sequence.
-        seq_target (str): Target sequence.
-        blosum_matrix (dict): BLOSUM62 matrix.
-        threshold (int): Score threshold for including an alignment.
+        double_hits (list): Liste des double-hits détectés.
+        seq_query (str): Séquence query.
+        seq_target (str): Séquence target.
+        blosum_matrix (dict): Matrice BLOSUM62.
+        bit_score_threshold (float): Seuil pour filtrer les alignements basés sur le bit score.
 
     Returns:
-        list: List of filtered alignments.
+        list: Liste des alignements filtrés.
     """
     alignments = []
     for hit in double_hits:
         kmer1, pos1, query_pos1, kmer2, pos2, query_pos2 = hit
         initial_score = evaluate_double_hit(kmer1, kmer2, blosum_matrix)
-        if initial_score >= threshold:
+        if initial_score <= 0:  # Conserver uniquement les alignements avec un score initial positif
             score, alignment = extend_alignment(seq_query, seq_target, query_pos1, pos1, blosum_matrix, gap_open_penalty=-11, gap_extension_penalty=-2)
-            alignments.append((score, alignment))
+            bit_score = calculate_bit_score(score)
+            if bit_score >= bit_score_threshold:
+                alignments.append((score, alignment))
     return alignments
 
 def filter_duplicate_alignments(alignments):
@@ -276,44 +339,57 @@ def filter_duplicate_alignments(alignments):
 
     return unique_alignments
 
-# Calculate E-value from score
-def calculate_e_value(score, m, n, lambda_param=0.318, K=0.134):
+# Fonction pour calculer le bit score
+def calculate_bit_score(raw_score, lambda_param=0.318, K=0.134):
     """
-    Calculates the E-value based on the score and sequence lengths.
-
+    Calcule le bit score à partir du score brut.
+    
     Args:
-        score (int): Alignment score.
-        m (int): Length of the query sequence.
-        n (int): Total length of the database.
-        lambda_param (float): Lambda parameter for the score distribution.
-        K (float): K parameter for the score distribution.
+        raw_score (int): Score brut (raw score).
+        lambda_param (float): Paramètre lambda pour la distribution des scores.
+        K (float): Paramètre K pour la distribution des scores.
 
     Returns:
-        float: The calculated E-value.
+        float: Le bit score.
     """
-    e_value = K * m * n * math.exp(-lambda_param * score)
-    return e_value
+    return (lambda_param * raw_score - math.log(K)) / math.log(2)
+
+# Calculate E-value from score
+def calculate_e_value_from_bitscore(bit_score, m, n):
+    """
+    Calcule l'E-value à partir du bit score.
+
+    Args:
+        bit_score (float): Le bit score de l'alignement.
+        m (int): Longueur de la séquence query.
+        n (int): Longueur totale de la base de données.
+
+    Returns:
+        float: E-value calculée.
+    """
+    return m * n * math.pow(2, -bit_score)
 
 # Calculate E-values for all alignments
 def calculate_e_values(alignments, seq_query, len_database):
     """
-    Calculates E-values for a list of alignments.
+    Calcule les E-values pour une liste d'alignements en utilisant les bit scores.
 
     Args:
-        alignments (list): List of alignments with their score.
-        seq_query (str): Query sequence.
-        len_database (int): Total length of the database.
+        alignments (list): Liste des alignements avec leur score brut.
+        seq_query (str): Séquence de la query.
+        len_database (int): Longueur totale de la base de données.
 
     Returns:
-        list: List of E-values associated with each alignment.
+        list: Liste des E-values associées à chaque alignement.
     """
     e_values = []
     m = len(seq_query)
     n = len_database
 
-    for score, alignment in alignments:
-        e_value = calculate_e_value(score, m, n)
-        e_values.append((e_value, score, alignment))
+    for raw_score, alignment in alignments:
+        bit_score = calculate_bit_score(raw_score)  # Calcul du bit score
+        e_value = calculate_e_value_from_bitscore(bit_score, m, n)  # Calcul de l'E-value à partir du bit score
+        e_values.append((e_value, raw_score, alignment))
     
     return e_values
 
@@ -367,24 +443,59 @@ def format_alignment(seq_query, seq_target, alignment):
     return query_str, match_str, target_str
 
 # Display formatted alignment results
-def display_results(alignments, e_values):
+def display_blast_like_results(alignments, e_values, seq_query, seq_target):
     """
-    Displays the alignment results in a formatted way.
+    Displays the alignment results in a BLAST-like format, including score, E-value, identities, positives, and gaps.
 
     Args:
-        alignments (list): List of alignments.
+        alignments (list): List of alignments with their score.
         e_values (list): List of E-values associated with the alignments.
+        seq_query (str): The query sequence.
+        seq_target (str): The target sequence.
     """
+    # Parameters for formatting
+    line_length = 60  # Number of characters per line in the alignment display
+
     print(f"{len(e_values)} significant alignments found:\n")
     
-    for i, (e_value, score, alignment) in enumerate(e_values, 1):
+    for i, (e_value, raw_score, alignment) in enumerate(e_values, 1):
+        bit_score = calculate_bit_score(raw_score)
         query_str, match_str, target_str = format_alignment(seq_query, seq_target, alignment)
 
+        # Calculate identities, positives, and gaps
+        identities = sum(1 for q, t in alignment if q == t)
+        positives = sum(1 for q, t in alignment if get_blosum62_score(q, t, blosum62) > 0)
+        gaps = sum(1 for q, t in alignment if q == '-' or t == '-')
+
+        # Calculate the percentages
+        total_length = len(alignment)
+        identity_percentage = (identities / total_length) * 100
+        positive_percentage = (positives / total_length) * 100
+        gap_percentage = (gaps / total_length) * 100
+
+        # Display summary information
         print(f"Alignment {i}:")
-        print(f"Score: {score}, E-value: {e_value:.2e}")
-        print(f"Query:  {query_str}")
-        print(f"        {match_str}")
-        print(f"Target: {target_str}")
+        print(f" Score = {raw_score}, bits=({bit_score:.2f}), Expect = {e_value:.2e}")
+        print(f" Identities = {identities}/{total_length} ({identity_percentage:.0f}%), "
+              f"Positives = {positives}/{total_length} ({positive_percentage:.0f}%), "
+              f"Gaps = {gaps}/{total_length} ({gap_percentage:.0f}%)")
+        print("\n")
+
+        # Display alignment block by block
+        for block_start in range(0, total_length, line_length):
+            block_end = block_start + line_length
+            query_block = query_str[block_start:block_end]
+            match_block = match_str[block_start:block_end]
+            target_block = target_str[block_start:block_end]
+
+            query_label = f"Query {block_start + 1}".ljust(9)
+            target_label = f"Sbjct {block_start + 1}".ljust(9)
+            
+            print(f"{query_label} {query_block}")
+            print(f"{''.ljust(9)} {match_block}")
+            print(f"{target_label} {target_block}")
+            print()
+
         print("\n" + "-"*50 + "\n")
 
 # Function to load FASTA database
@@ -411,23 +522,25 @@ if __name__ == "__main__":
 
     k = 3
     max_distance = 40
-    score_threshold = 15
+    bit_score_threshold = -1  # Seuil basé sur le bit score
     
-    fasta_file = "subset_2000_sequences.fasta"
-    database_sequences = load_fasta_database(fasta_file)
-    
+    #fasta_file = "subset_2000_sequences.fasta"
+    #database_sequences = load_fasta_database(fasta_file)
+    #database_sequences = ["MDKVCAVFGGSRGIGRAVAQLMARKGYRLAVIARNLEGAKAAAGDLGGDHLAFSCDVAKEHDVQNTFEELEKHLGRVNFLVNAAGINRDGLLVRTKTEDMVSQLHTNLLGSMLTCKAAMRTMIQQQGGSIVNVGSIVGLKGNSGQSVYSASKGGLVGFSRALAKEVARKKIRVNVVAPGFVHTDMTKDLKEEHLKKNIPLGRFGETIEVAHAVVFLLESPYITGHVLVVDGGLQLIL"]
+    database_sequences = ["MGRLDGKVIILTAAAQGIGQAAALAFAREGAKVIATDINESKLQELEKYPGIQTRVLDVTKKKQIDQFANEVERLDVLFNVAGFVHHGTVLDCEEKDWDFSMNLNVRSMYLMIKAFLPKMLAQKSGNIINMSSVASSVKGVVNRCVYSTTKAAVIGLTKSVAADFIQQGIRCNCVCPGTVDTPSLQERIQARGNPEEARNDFLKRQKTGRFATAEEIAMLCVYLASDESAYVTGNPVIIDGGWSL"]
+
     len_database = sum(len(seq) for seq in database_sequences)
-    
     kmers = extract_kmers(seq_query, k)
 
     for i, seq_target in enumerate(database_sequences):
+        #print(i)
         target_index = index_target_sequence(seq_target, k)
         kmer_positions = find_kmer_positions(kmers, target_index)
         double_hits = find_double_hits(kmer_positions, max_distance)
-        alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, threshold=score_threshold)
+        alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, bit_score_threshold)  # Utilisation du threshold basé sur le bit score
         alignments = filter_duplicate_alignments(alignments)
         e_values = calculate_e_values(alignments, seq_query, len_database)
         significant_alignments = filter_by_e_value(e_values, threshold=0.00001)
 
         if significant_alignments:
-            display_results(alignments, significant_alignments)
+            display_blast_like_results(alignments, e_values, seq_query, seq_target)
