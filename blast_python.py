@@ -2,75 +2,75 @@ import math
 from Bio import SeqIO
 from Bio.SubsMat import MatrixInfo
 
-# Fonction pour obtenir le score entre deux acides aminés avec BLOSUM62
+# Function to obtain the BLOSUM62 score for a pair of amino acids
 def get_blosum62_score(a, b, blosum_matrix):
     """
-    Retourne le score BLOSUM62 pour une paire d'acides aminés.
+    Returns the BLOSUM62 score for a pair of amino acids.
 
     Args:
-        a (str): Premier acide aminé.
-        b (str): Deuxième acide aminé.
-        blosum_matrix (dict): Matrice BLOSUM62 chargée via Biopython.
+        a (str): First amino acid.
+        b (str): Second amino acid.
+        blosum_matrix (dict): BLOSUM62 matrix loaded via Biopython.
 
     Returns:
-        int: Le score de la paire d'acides aminés ou -4 si la paire n'existe pas.
+        int: The score of the amino acid pair or -4 if the pair does not exist.
     """
     if (a, b) in blosum_matrix:
         return blosum_matrix[(a, b)]
     elif (b, a) in blosum_matrix:
         return blosum_matrix[(b, a)]
     else:
-        return -4  # pénalité par défaut pour mismatch/gap
+        return -4  # default penalty for mismatch/gap
 
-# Extraction des k-mers
+# K-mer extraction
 def extract_kmers(sequence, k):
     """
-    Extrait les k-mers d'une séquence donnée.
+    Extracts k-mers from a given sequence.
 
     Args:
-        sequence (str): La séquence à traiter.
-        k (int): La longueur des k-mers.
+        sequence (str): The sequence to process.
+        k (int): The length of the k-mers.
 
     Returns:
-        list: Liste de tuples contenant le k-mer et sa position.
+        list: List of tuples containing the k-mer and its position.
     """
     kmers = []
     for i in range(len(sequence) - k + 1):
         kmer = sequence[i:i+k]
-        kmers.append((kmer, i))  # Conserver l'indice d'origine
+        kmers.append((kmer, i))  # Preserve the original index
     return kmers
 
-# Indexation de la séquence cible pour une recherche rapide des k-mers
+# Indexing the target sequence for fast k-mer search
 def index_target_sequence(sequence, k):
     """
-    Indexe une séquence cible en fonction des k-mers pour une recherche rapide.
+    Indexes a target sequence by k-mers for fast searching.
 
     Args:
-        sequence (str): Séquence cible à indexer.
-        k (int): Longueur des k-mers.
+        sequence (str): Target sequence to index.
+        k (int): Length of the k-mers.
 
     Returns:
-        dict: Dictionnaire où les clés sont des k-mers et les valeurs sont les positions dans la séquence.
+        dict: Dictionary where keys are k-mers and values are positions in the sequence.
     """
     kmer_index = {}
     for i in range(len(sequence) - k + 1):
         kmer = sequence[i:i+k]
         if kmer not in kmer_index:
             kmer_index[kmer] = []
-        kmer_index[kmer].append(i)  # Conserver l'indice d'origine
+        kmer_index[kmer].append(i)  # Preserve the original index
     return kmer_index
 
-# Trouver les positions des k-mers dans la séquence cible
+# Find k-mer positions in the target sequence
 def find_kmer_positions(kmers, target_index):
     """
-    Trouve les positions des k-mers extraits dans une séquence cible indexée.
+    Finds the positions of the extracted k-mers in an indexed target sequence.
 
     Args:
-        kmers (list): Liste de k-mers avec leurs positions.
-        target_index (dict): Index de la séquence cible.
+        kmers (list): List of k-mers with their positions.
+        target_index (dict): Index of the target sequence.
 
     Returns:
-        dict: Dictionnaire des k-mers et leurs positions respectives dans les séquences query et target.
+        dict: Dictionary of k-mers and their respective positions in the query and target sequences.
     """
     positions = {}
     for kmer, query_pos in kmers:
@@ -78,23 +78,23 @@ def find_kmer_positions(kmers, target_index):
             for target_pos in target_index[kmer]:
                 if kmer not in positions:
                     positions[kmer] = []
-                positions[kmer].append((target_pos, query_pos))  # position dans target et dans query
+                positions[kmer].append((target_pos, query_pos))  # position in target and in query
     return positions
 
-# Fonction pour trouver les double-hits sur la même diagonale et sans superposition stricte
+# Function to find double-hits on the same diagonal and without strict overlap
 def find_double_hits(kmer_positions, max_distance):
     """
-    Identifie les double-hits dans la séquence cible.
+    Identifies double-hits in the target sequence.
 
-    Les double-hits sont des paires de k-mers sur la même diagonale, qui ne se superposent pas et
-    dont la distance est inférieure à un seuil défini.
+    Double-hits are pairs of k-mers on the same diagonal, that do not overlap,
+    and whose distance is less than a defined threshold.
 
     Args:
-        kmer_positions (dict): Positions des k-mers dans la séquence cible.
-        max_distance (int): Distance maximale permise entre deux hits pour être considérés comme un double-hit.
+        kmer_positions (dict): Positions of k-mers in the target sequence.
+        max_distance (int): Maximum allowed distance between two hits to be considered a double-hit.
 
     Returns:
-        list: Liste de tuples représentant les double-hits détectés.
+        list: List of tuples representing the detected double-hits.
     """
     double_hits = []
     kmer_list = list(kmer_positions.items())
@@ -105,88 +105,88 @@ def find_double_hits(kmer_positions, max_distance):
             for j in range(i + 1, len(kmer_list)):
                 kmer2, positions2 = kmer_list[j]
                 for pos2, query_pos2 in positions2:
-                    # Vérification de la diagonale
+                    # Check diagonal
                     if (pos1 - query_pos1) == (pos2 - query_pos2):
-                        # Vérification de la non-superposition stricte et de la distance
+                        # Check for strict non-overlap and distance
                         if abs(pos2 - pos1) <= max_distance:
-                            # Éviter uniquement les hits qui sont exactement au même endroit
+                            # Avoid hits that are exactly in the same location
                             if pos1 != pos2 or query_pos1 != query_pos2:
-                                # Double hit détecté
+                                # Double hit detected
                                 double_hits.append((kmer1, pos1, query_pos1, kmer2, pos2, query_pos2))
     return double_hits
 
-# Fonction pour évaluer le score initial d'un double-hit
+# Function to evaluate the initial score of a double-hit
 def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
     """
-    Calcule le score initial d'un double-hit en se basant sur la matrice BLOSUM62.
+    Calculates the initial score of a double-hit based on the BLOSUM62 matrix.
 
     Args:
-        kmer1 (str): Premier k-mer.
-        kmer2 (str): Deuxième k-mer.
-        blosum_matrix (dict): Matrice BLOSUM62.
+        kmer1 (str): First k-mer.
+        kmer2 (str): Second k-mer.
+        blosum_matrix (dict): BLOSUM62 matrix.
 
     Returns:
-        int: Le score du double-hit.
+        int: The score of the double-hit.
     """
     score = 0
     for a, b in zip(kmer1, kmer2):
         score += get_blosum62_score(a, b, blosum_matrix)
     return score
 
-# Extension d'un double-hit avec gapped alignment
+# Extend a double-hit with gapped alignment
 def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
                      gap_open_penalty=-11, gap_extension_penalty=-2):
     """
-    Étend un double-hit en un alignement avec prise en compte des gaps.
+    Extends a double-hit into an alignment with gap penalties.
 
     Args:
-        seq_query (str): Séquence query.
-        seq_target (str): Séquence cible.
-        query_pos (int): Position du hit dans la séquence query.
-        target_pos (int): Position du hit dans la séquence cible.
-        blosum_matrix (dict): Matrice BLOSUM62.
-        gap_open_penalty (int): Pénalité pour l'ouverture d'un gap.
-        gap_extension_penalty (int): Pénalité pour l'extension d'un gap.
+        seq_query (str): Query sequence.
+        seq_target (str): Target sequence.
+        query_pos (int): Hit position in the query sequence.
+        target_pos (int): Hit position in the target sequence.
+        blosum_matrix (dict): BLOSUM62 matrix.
+        gap_open_penalty (int): Penalty for gap opening.
+        gap_extension_penalty (int): Penalty for gap extension.
 
     Returns:
-        tuple: Le score de l'alignement et l'alignement lui-même sous forme de liste de tuples.
+        tuple: The alignment score and the alignment itself as a list of tuples.
     """
     score = 0
     alignment = []
 
-    # Étendre vers la gauche
+    # Extend to the left
     left_score, left_alignment = extend_direction(seq_query, seq_target, query_pos - 1, target_pos - 1, 
                                                   blosum_matrix, gap_open_penalty, gap_extension_penalty, direction='left')
     
-    # Étendre vers la droite
+    # Extend to the right
     right_score, right_alignment = extend_direction(seq_query, seq_target, query_pos, target_pos, 
                                                     blosum_matrix, gap_open_penalty, gap_extension_penalty, direction='right')
     
-    # Combiner les scores et les alignements
+    # Combine scores and alignments
     score = left_score + right_score
     alignment = left_alignment[::-1] + right_alignment  # Reverse the left alignment and combine with right
     
     return score, alignment
 
-# Fonction pour étendre dans une direction (gauche ou droite)
+# Extend an alignment in one direction (left or right)
 def extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
                      gap_open_penalty=-11, gap_extension_penalty=-2, direction='right', max_dropoff=10):
     """
-    Étend un alignement dans une direction donnée avec prise en compte des gaps.
+    Extends an alignment in a given direction, considering gap penalties.
 
     Args:
-        seq_query (str): Séquence query.
-        seq_target (str): Séquence cible.
-        query_pos (int): Position dans la séquence query.
-        target_pos (int): Position dans la séquence cible.
-        blosum_matrix (dict): Matrice BLOSUM62.
-        gap_open_penalty (int): Pénalité pour l'ouverture d'un gap.
-        gap_extension_penalty (int): Pénalité pour l'extension d'un gap.
-        direction (str): Direction de l'extension ('left' ou 'right').
-        max_dropoff (int): Valeur seuil pour arrêter l'extension.
+        seq_query (str): Query sequence.
+        seq_target (str): Target sequence.
+        query_pos (int): Position in the query sequence.
+        target_pos (int): Position in the target sequence.
+        blosum_matrix (dict): BLOSUM62 matrix.
+        gap_open_penalty (int): Penalty for gap opening.
+        gap_extension_penalty (int): Penalty for gap extension.
+        direction (str): Direction of the extension ('left' or 'right').
+        max_dropoff (int): Threshold value to stop the extension.
 
     Returns:
-        tuple: Le score de l'extension et l'alignement sous forme de liste de tuples.
+        tuple: The score of the extension and the alignment as a list of tuples.
     """
     score = 0
     alignment = []
@@ -199,12 +199,12 @@ def extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix
     while i >= 0 and j >= 0 and i < len(seq_query) and j < len(seq_target):
         match_score = get_blosum62_score(seq_query[i], seq_target[j], blosum_matrix)
         
-        # Si le match score est inférieur à la pénalité d'ouverture, on considère un gap
+        # If match score is below the gap opening penalty, consider a gap
         if match_score <= gap_open_penalty:
             if gap_opened_in_query or gap_opened_in_target:
-                score += gap_extension_penalty  # Extension du gap
+                score += gap_extension_penalty  # Gap extension
             else:
-                score += gap_open_penalty  # Ouverture du gap
+                score += gap_open_penalty  # Gap opening
                 gap_opened_in_query = True
                 gap_opened_in_target = True
             alignment.append(('-', seq_target[j]) if seq_query[i] == '-' else (seq_query[i], '-'))
@@ -219,7 +219,7 @@ def extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix
         if current_score < -max_dropoff:
             break
 
-        # Incrémenter i et j après avoir traité les positions
+        # Increment i and j after processing the positions
         if direction == 'left':
             i -= 1
             j -= 1
@@ -229,20 +229,20 @@ def extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix
 
     return score, alignment
 
-# Filtrer les alignements par score
+# Filter alignments by score
 def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, threshold=-30):
     """
-    Filtre et étend les alignements basés sur les double-hits détectés.
+    Filters and extends alignments based on the detected double-hits.
 
     Args:
-        double_hits (list): Liste des double-hits détectés.
-        seq_query (str): Séquence query.
-        seq_target (str): Séquence cible.
-        blosum_matrix (dict): Matrice BLOSUM62.
-        threshold (int): Seuil de score pour l'inclusion d'un alignement.
+        double_hits (list): List of detected double-hits.
+        seq_query (str): Query sequence.
+        seq_target (str): Target sequence.
+        blosum_matrix (dict): BLOSUM62 matrix.
+        threshold (int): Score threshold for including an alignment.
 
     Returns:
-        list: Liste d'alignements filtrés.
+        list: List of filtered alignments.
     """
     alignments = []
     for hit in double_hits:
@@ -255,19 +255,19 @@ def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, thresho
 
 def filter_duplicate_alignments(alignments):
     """
-    Filtre les alignements dupliqués en conservant uniquement les uniques.
+    Filters out duplicate alignments, keeping only unique ones.
 
     Args:
-        alignments (list): Liste d'alignements.
+        alignments (list): List of alignments.
 
     Returns:
-        list: Liste d'alignements uniques.
+        list: List of unique alignments.
     """
     unique_alignments = []
     seen_positions = set()
 
     for score, alignment in alignments:
-        # Créer une clé unique basée sur les positions de l'alignement
+        # Create a unique key based on the alignment positions
         alignment_key = tuple(alignment)
         
         if alignment_key not in seen_positions:
@@ -276,36 +276,36 @@ def filter_duplicate_alignments(alignments):
 
     return unique_alignments
 
-# Calcul de l'E-value à partir du score
+# Calculate E-value from score
 def calculate_e_value(score, m, n, lambda_param=0.318, K=0.134):
     """
-    Calcule l'E-value basée sur le score et la longueur des séquences.
+    Calculates the E-value based on the score and sequence lengths.
 
     Args:
-        score (int): Score de l'alignement.
-        m (int): Longueur de la séquence query.
-        n (int): Longueur totale de la base de données.
-        lambda_param (float): Paramètre lambda pour la distribution des scores.
-        K (float): Paramètre K pour la distribution des scores.
+        score (int): Alignment score.
+        m (int): Length of the query sequence.
+        n (int): Total length of the database.
+        lambda_param (float): Lambda parameter for the score distribution.
+        K (float): K parameter for the score distribution.
 
     Returns:
-        float: L'E-value calculée.
+        float: The calculated E-value.
     """
     e_value = K * m * n * math.exp(-lambda_param * score)
     return e_value
 
-# Calcul des E-values pour tous les alignements
+# Calculate E-values for all alignments
 def calculate_e_values(alignments, seq_query, len_database):
     """
-    Calcule les E-values pour une liste d'alignements.
+    Calculates E-values for a list of alignments.
 
     Args:
-        alignments (list): Liste des alignements avec leur score.
-        seq_query (str): Séquence query.
-        len_database (int): Longueur totale de la base de données.
+        alignments (list): List of alignments with their score.
+        seq_query (str): Query sequence.
+        len_database (int): Total length of the database.
 
     Returns:
-        list: Liste des E-values associées à chaque alignement.
+        list: List of E-values associated with each alignment.
     """
     e_values = []
     m = len(seq_query)
@@ -317,33 +317,33 @@ def calculate_e_values(alignments, seq_query, len_database):
     
     return e_values
 
-# Filtrer les alignements par E-value
+# Filter alignments by E-value
 def filter_by_e_value(e_values, threshold=0.01):
     """
-    Filtre les alignements en fonction d'un seuil d'E-value.
+    Filters alignments based on an E-value threshold.
 
     Args:
-        e_values (list): Liste des alignements avec leurs E-values.
-        threshold (float): Seuil d'E-value pour filtrer les alignements.
+        e_values (list): List of alignments with their E-values.
+        threshold (float): E-value threshold for filtering alignments.
 
     Returns:
-        list: Liste des alignements significatifs avec E-value inférieure au seuil.
+        list: List of significant alignments with E-value below the threshold.
     """
     filtered_alignments = [align for align in e_values if align[0] <= threshold]
     return filtered_alignments
 
-# Fonction pour formater l'alignement pour un affichage BLAST-like
+# Function to format the alignment for BLAST-like display
 def format_alignment(seq_query, seq_target, alignment):
     """
-    Formate un alignement pour un affichage de style BLAST.
+    Formats an alignment for BLAST-style display.
 
     Args:
-        seq_query (str): Séquence query.
-        seq_target (str): Séquence cible.
-        alignment (list): Alignement à formater.
+        seq_query (str): Query sequence.
+        seq_target (str): Target sequence.
+        alignment (list): Alignment to format.
 
     Returns:
-        tuple: Chaînes formatées pour la query, la ligne de correspondance, et la cible.
+        tuple: Formatted strings for the query, match line, and target.
     """
     query_aligned = []
     target_aligned = []
@@ -354,11 +354,11 @@ def format_alignment(seq_query, seq_target, alignment):
         target_aligned.append(t_res if t_res != '-' else '-')
 
         if q_res == t_res:
-            match_line.append('|')  # correspondance parfaite
+            match_line.append('|')  # perfect match
         elif get_blosum62_score(q_res, t_res, MatrixInfo.blosum62) > 0:
-            match_line.append(':')  # correspondance raisonnable
+            match_line.append(':')  # reasonable match
         else:
-            match_line.append('.')  # mismatch ou faible correspondance
+            match_line.append('.')  # mismatch or weak match
 
     query_str = "".join(query_aligned)
     match_str = "".join(match_line)
@@ -366,44 +366,44 @@ def format_alignment(seq_query, seq_target, alignment):
 
     return query_str, match_str, target_str
 
-# Affichage des résultats formatés
+# Display formatted alignment results
 def display_results(alignments, e_values):
     """
-    Affiche les résultats d'alignement de manière formatée.
+    Displays the alignment results in a formatted way.
 
     Args:
-        alignments (list): Liste des alignements.
-        e_values (list): Liste des E-values associées aux alignements.
+        alignments (list): List of alignments.
+        e_values (list): List of E-values associated with the alignments.
     """
-    print(f"{len(e_values)} alignements significatifs trouvés :\n")
+    print(f"{len(e_values)} significant alignments found:\n")
     
     for i, (e_value, score, alignment) in enumerate(e_values, 1):
         query_str, match_str, target_str = format_alignment(seq_query, seq_target, alignment)
 
-        print(f"Alignement {i}:")
+        print(f"Alignment {i}:")
         print(f"Score: {score}, E-value: {e_value:.2e}")
         print(f"Query:  {query_str}")
         print(f"        {match_str}")
         print(f"Target: {target_str}")
         print("\n" + "-"*50 + "\n")
 
-# Fonction pour charger la base de données FASTA
+# Function to load FASTA database
 def load_fasta_database(fasta_file):
     """
-    Charge une base de données FASTA à partir d'un fichier.
+    Loads a FASTA database from a file.
 
     Args:
-        fasta_file (str): Chemin vers le fichier FASTA.
+        fasta_file (str): Path to the FASTA file.
 
     Returns:
-        list: Liste des séquences de la base de données.
+        list: List of sequences in the database.
     """
     sequences = []
     for record in SeqIO.parse(fasta_file, "fasta"):
         sequences.append(str(record.seq))
     return sequences
 
-# Exemple d'utilisation avec la base de données FASTA
+# Example usage with FASTA database
 if __name__ == "__main__":
     seq_query = "MGRLDGKVIILTAAAQGIGQAAALAFAREGAKVIATDINESKLQELEKYPGIQTRVLDVTKKKQIDQFANEVERLDVLFNVAGFVHHGTVLDCEEKDWDFSMNLNVRSMYLMIKAFLPKMLAQKSGNIINMSSVASSVKGVVNRCVYSTTKAAVIGLTKSVAADFIQQGIRCNCVCPGTVDTPSLQERIQARGNPEEARNDFLKRQKTGRFATAEEIAMLCVYLASDESAYVTGNPVIIDGGWSL"
     
