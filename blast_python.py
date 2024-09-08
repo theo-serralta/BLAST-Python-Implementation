@@ -52,9 +52,10 @@ def find_double_hits(kmer_positions, max_distance):
                 kmer2, positions2 = kmer_list[j]
                 for pos2, query_pos2 in positions2:
                     if abs(pos2 - pos1) <= max_distance:
-                        # Double hit détecté
+                        # Double hit détecté uniquement si la distance est respectée
                         double_hits.append((kmer1, pos1, query_pos1, kmer2, pos2, query_pos2))
     return double_hits
+
 
 # Fonction pour évaluer le score initial d'un double-hit
 def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
@@ -64,15 +65,18 @@ def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
     return score
 
 # Extension d'un double-hit avec gapped alignment
-def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, gap_penalty=-4):
+def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
+                     gap_open_penalty=-11, gap_extension_penalty=-2):
     score = 0
     alignment = []
 
     # Étendre vers la gauche
-    left_score, left_alignment = extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix, gap_penalty, direction='left')
+    left_score, left_alignment = extend_direction(seq_query, seq_target, query_pos - 1, target_pos - 1, 
+                                                  blosum_matrix, gap_open_penalty, gap_extension_penalty, direction='left')
     
     # Étendre vers la droite
-    right_score, right_alignment = extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix, gap_penalty, direction='right')
+    right_score, right_alignment = extend_direction(seq_query, seq_target, query_pos, target_pos, 
+                                                    blosum_matrix, gap_open_penalty, gap_extension_penalty, direction='right')
     
     # Combiner les scores et les alignements
     score = left_score + right_score
@@ -80,56 +84,77 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
     
     return score, alignment
 
+
+
 # Fonction pour étendre dans une direction (gauche ou droite)
-def extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix, gap_penalty, direction='right', max_dropoff=10):
+def extend_direction(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
+                     gap_open_penalty=-11, gap_extension_penalty=-2, direction='right', max_dropoff=10):
     score = 0
     alignment = []
     current_score = 0
     i = query_pos
     j = target_pos
-    
-    # Boucle d'extension
+    gap_opened_in_query = False
+    gap_opened_in_target = False
+
     while i >= 0 and j >= 0 and i < len(seq_query) and j < len(seq_target):
+        match_score = get_blosum62_score(seq_query[i], seq_target[j], blosum_matrix)
+        
+        # Si le match score est inférieur à la pénalité d'ouverture, on considère un gap
+        if match_score <= gap_open_penalty:
+            if gap_opened_in_query or gap_opened_in_target:
+                score += gap_extension_penalty  # Extension du gap
+            else:
+                score += gap_open_penalty  # Ouverture du gap
+                gap_opened_in_query = True
+                gap_opened_in_target = True
+            alignment.append(('-', seq_target[j]) if seq_query[i] == '-' else (seq_query[i], '-'))
+        else:
+            alignment.append((seq_query[i], seq_target[j]))
+            score += match_score
+            gap_opened_in_query = False
+            gap_opened_in_target = False
+        
+        current_score += match_score
+
+        if current_score < -max_dropoff:
+            break
+
+        # Incrémenter i et j après avoir traité les positions
         if direction == 'left':
             i -= 1
             j -= 1
         else:  # direction 'right'
             i += 1
             j += 1
-        
-        # Stop si on dépasse les limites
-        if i < 0 or j < 0 or i >= len(seq_query) or j >= len(seq_target):
-            break
-        
-        # Score de l'alignement actuel
-        match_score = get_blosum62_score(seq_query[i], seq_target[j], blosum_matrix)
-        
-        # Ajouter gap si le match est trop faible
-        if match_score <= gap_penalty:
-            alignment.append(('-', seq_target[j]))
-            score += gap_penalty
-        else:
-            alignment.append((seq_query[i], seq_target[j]))
-            score += match_score
-        
-        current_score += match_score
-        
-        # Si la différence entre le score actuel et le score maximum dépasse le max_dropoff, on arrête l'extension
-        if current_score < -max_dropoff:
-            break
 
     return score, alignment
 
 # Filtrer les alignements par score
-def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, threshold=15):
+def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, threshold=-30):
     alignments = []
     for hit in double_hits:
         kmer1, pos1, query_pos1, kmer2, pos2, query_pos2 = hit
         initial_score = evaluate_double_hit(kmer1, kmer2, blosum_matrix)
         if initial_score >= threshold:
-            score, alignment = extend_alignment(seq_query, seq_target, query_pos1, pos1, blosum_matrix)
+            score, alignment = extend_alignment(seq_query, seq_target, query_pos1, pos1, blosum_matrix, gap_open_penalty=-11, gap_extension_penalty=-2)
+
             alignments.append((score, alignment))
     return alignments
+
+def filter_duplicate_alignments(alignments):
+    unique_alignments = []
+    seen_positions = set()
+
+    for score, alignment in alignments:
+        # Créer une clé unique basée sur les positions de l'alignement
+        alignment_key = tuple(alignment)
+        
+        if alignment_key not in seen_positions:
+            unique_alignments.append((score, alignment))
+            seen_positions.add(alignment_key)
+
+    return unique_alignments
 
 # Calcul de l'E-value à partir du score
 def calculate_e_value(score, m, n, lambda_param=0.318, K=0.134):
@@ -140,13 +165,14 @@ def calculate_e_value(score, m, n, lambda_param=0.318, K=0.134):
     return e_value
 
 # Calcul des E-values pour tous les alignements
-def calculate_e_values(alignments, seq_query, seq_target):
+def calculate_e_values(alignments, seq_query, len_database):
     e_values = []
     m = len(seq_query)
-    n = len(seq_target)
-    
+    n = len_database
+
+    # Boucle pour calculer l'E-value pour chaque alignement
     for score, alignment in alignments:
-        e_value = calculate_e_value(score, m, n)
+        e_value = calculate_e_value(score, m, n)  # n reste constant ici
         e_values.append((e_value, score, alignment))
     
     return e_values
@@ -211,15 +237,20 @@ if __name__ == "__main__":
     
     # Paramètres
     k = 3
-    max_distance = 10
+    max_distance = 40
     score_threshold = 15
     
     # Charger la base de données de séquences FASTA
     fasta_file = "subset_2000_sequences.fasta"
     database_sequences = load_fasta_database(fasta_file)
     
+    len_database = 0
+    for seq in database_sequences:
+        len_database += len(seq)
+
     print(f"{len(database_sequences)} séquences chargées depuis la base de données FASTA.")
-    
+
+
     # Pour chaque séquence dans la base de données, on effectue l'alignement avec la query
     for seq_target in database_sequences:
         # Extraction des k-mers
@@ -237,8 +268,10 @@ if __name__ == "__main__":
         # Filtrer et étendre les alignements
         alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, threshold=score_threshold)
         
+        alignments = filter_duplicate_alignments(alignments)
+
         # Calculer les E-values
-        e_values = calculate_e_values(alignments, seq_query, seq_target)
+        e_values = calculate_e_values(alignments, seq_query, len_database)
         
         # Filtrer par E-value
         significant_alignments = filter_by_e_value(e_values, threshold=0.00001)
