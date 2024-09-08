@@ -522,7 +522,7 @@ if __name__ == "__main__":
 
     k = 3
     max_distance = 40
-    bit_score_threshold = -1  # Seuil basé sur le bit score
+    bit_score_threshold = 22  # Seuil basé sur le bit score
     
     #fasta_file = "subset_2000_sequences.fasta"
     #database_sequences = load_fasta_database(fasta_file)
@@ -533,14 +533,27 @@ if __name__ == "__main__":
     kmers = extract_kmers(seq_query, k)
 
     for i, seq_target in enumerate(database_sequences):
-        #print(i)
-        target_index = index_target_sequence(seq_target, k)
-        kmer_positions = find_kmer_positions(kmers, target_index)
-        double_hits = find_double_hits(kmer_positions, max_distance)
-        alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, bit_score_threshold)  # Utilisation du threshold basé sur le bit score
-        alignments = filter_duplicate_alignments(alignments)
-        e_values = calculate_e_values(alignments, seq_query, len_database)
-        significant_alignments = filter_by_e_value(e_values, threshold=0.00001)
+            # Step 1: Check if the query is identical to the target
+            if seq_query == seq_target:
+                # Directly process identical sequences with perfect alignment
+                perfect_alignment = list(zip(seq_query, seq_target))  # Perfect alignment with no gaps
+                raw_score = sum(get_blosum62_score(q, t, blosum62) for q, t in perfect_alignment)  # Perfect score
+                bit_score = calculate_bit_score(raw_score)  # Convert to bit score
+                e_value = calculate_e_value_from_bitscore(bit_score, len(seq_query), len_database)  # Calculate E-value
 
-        if significant_alignments:
-            display_blast_like_results(alignments, e_values, seq_query, seq_target)
+                print("Perfect alignment detected (query == target).")
+                display_blast_like_results([(raw_score, perfect_alignment)], [(e_value, raw_score, perfect_alignment)], seq_query, seq_target)
+                continue  # Skip to the next target
+
+            # Step 2: Continue with the regular alignment process if sequences are different
+            #print(i)
+            target_index = index_target_sequence(seq_target, k)
+            kmer_positions = find_kmer_positions(kmers, target_index)
+            double_hits = find_double_hits(kmer_positions, max_distance)
+            alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, bit_score_threshold)  # Utilisation du threshold basé sur le bit score
+            alignments = filter_duplicate_alignments(alignments)
+            e_values = calculate_e_values(alignments, seq_query, len_database)
+            significant_alignments = filter_by_e_value(e_values, threshold=0.00001)
+
+            if significant_alignments:
+                display_blast_like_results(alignments, e_values, seq_query, seq_target)
