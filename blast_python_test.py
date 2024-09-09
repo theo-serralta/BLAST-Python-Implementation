@@ -2,7 +2,7 @@ import unittest
 import math
 from Bio.SubsMat import MatrixInfo
 from blast_python import get_blosum62_score, extract_kmers, index_target_sequence, find_kmer_positions
-from blast_python import find_double_hits, evaluate_double_hit, extend_alignment, calculate_e_value, filter_alignments, calculate_e_values, filter_by_e_value
+from blast_python import find_double_hits, evaluate_double_hit, extend_alignment, calculate_e_value_from_bitscore, filter_alignments, calculate_e_values, filter_by_e_value
 
 class TestBlastAlgorithm(unittest.TestCase):
 
@@ -94,7 +94,7 @@ class TestBlastAlgorithm(unittest.TestCase):
         seq_target = "MKTGQ"
         
         double_hits = [('MKT', 0, 0, 'KTG', 1, 1)]  # Double hit avec mismatch
-        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, score_threshold=-5)
+        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, bit_score_threshold=-5)
         
         # S'assurer que l'alignement partiel est détecté malgré le mismatch
         self.assertGreater(len(alignments), 0, "Un alignement partiel devrait être trouvé même avec un mismatch.")
@@ -114,7 +114,7 @@ class TestBlastAlgorithm(unittest.TestCase):
         double_hits = find_double_hits(kmer_positions, max_distance=10)
 
         # Extend alignment with gap penalties
-        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, score_threshold=-30)
+        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, bit_score_threshold=-30)
 
         # Expect an alignment with gaps
         self.assertTrue(len(alignments) > 0, "No alignments with gaps were found")
@@ -140,13 +140,11 @@ class TestBlastAlgorithm(unittest.TestCase):
         ]
 
         score, alignment = extend_alignment(seq_query, seq_target, 0, 0, self.blosum62)
-        print(f"Generated alignment: {alignment}")
-        print(f"Expected alignment: {expected_alignment}")
+        #print(f"Generated alignment: {alignment}")
+        #print(f"Expected alignment: {expected_alignment}")
 
         # Check that gaps are inserted correctly
         self.assertEqual(alignment, expected_alignment)
-        display_alignment_with_gaps(alignment)
-
 
     def test_evaluate_double_hit(self):
         """ Test de la fonction evaluate_double_hit avec 3 cas : correspondance parfaite, mismatch et pénalité par défaut """
@@ -213,7 +211,7 @@ class TestBlastAlgorithm(unittest.TestCase):
         # Vérifier que le score de l'alignement est correct
         self.assertEqual(score, 31)  # Le score total attendu est 26
 
-    def test_calculate_e_value(self):
+    def calculate_e_value_from_bitscore(self):
         """ Test du calcul des E-values """
         score = 50
         m = 100  # Longueur de la séquence query
@@ -221,7 +219,7 @@ class TestBlastAlgorithm(unittest.TestCase):
         lambda_param = 0.318
         K = 0.134
         expected_e_value = K * m * n * math.exp(-lambda_param * score)
-        self.assertAlmostEqual(calculate_e_value(score, m, n), expected_e_value, places=5)
+        self.assertAlmostEqual(calculate_e_value_from_bitscore(score, m, n), expected_e_value, places=5)
 
     def test_filter_alignments(self):
         """ Test du filtrage des alignements par E-value """
@@ -278,7 +276,7 @@ class TestBlastAlgorithm(unittest.TestCase):
         double_hits = find_double_hits(kmer_positions, 2)
         #print(f"Double-hits: {double_hits}")
         
-        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, score_threshold=-5)
+        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, bit_score_threshold=-5)
         #print(f"Alignments: {alignments}")
         
         e_values = calculate_e_values(alignments, seq_query, len_database)
