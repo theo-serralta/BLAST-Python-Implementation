@@ -11,13 +11,16 @@ class TestBlastAlgorithm(unittest.TestCase):
         self.blosum62 = MatrixInfo.blosum62
 
     def test_get_blosum62_score(self):
-        """ Test de la fonction get_blosum62_score """
-        # Test d'une correspondance parfaite
+        """ Test the function get_blosum62_score """
+        # Test a perfect match
         self.assertEqual(get_blosum62_score('A', 'A', self.blosum62), 4)
-        # Test d'un mismatch
+        # Test a mismatch
         self.assertEqual(get_blosum62_score('A', 'W', self.blosum62), -3)
-        # Test d'une correspondance non trouvée (par défaut -4)
+        # Test a pair not found in BLOSUM62 (default -4)
         self.assertEqual(get_blosum62_score('A', 'J', self.blosum62), -4)
+        # Test a gap situation
+        self.assertEqual(get_blosum62_score('-', 'A', self.blosum62), -4)  # Assuming gaps use -4 by default
+
 
     def test_extract_kmers(self):
         """ Test de l'extraction des k-mers """
@@ -39,15 +42,111 @@ class TestBlastAlgorithm(unittest.TestCase):
         self.assertEqual(find_kmer_positions(kmers, target_index), expected_positions)
 
     def test_find_double_hits(self):
-        """ Test de la détection des double-hits """
+        """ Test de la détection des double-hits sur la même diagonale et sans superposition """
         kmer_positions = {
-            'MKT': [(0, 0)],
-            'KTW': [(1, 1), (5, 1)],
-            'TWQ': [(2, 2), (6, 2)]
+            'MKT': [(0, 0)],  # pos1=0, query_pos1=0
+            'KTW': [(1, 1), (5, 1)],  # pos1=1, query_pos1=1 et pos2=5, query_pos2=1
+            'TWQ': [(2, 2), (6, 2)]   # pos1=2, query_pos1=2 et pos2=6, query_pos2=2
         }
+        
+        # Les hits doivent être sur la même diagonale, donc on attend des correspondances diagonales :
         max_distance = 2
-        expected_hits = [('MKT', 0, 0, 'KTW', 1, 1), ('KTW', 1, 1, 'TWQ', 2, 2), ('MKT', 0, 0, 'TWQ', 2, 2), ('KTW', 5, 1, 'TWQ', 6, 2)]
+        expected_hits = [
+            ('MKT', 0, 0, 'KTW', 1, 1),  # Même diagonale : pos1 - query_pos1 == pos2 - query_pos2
+            ('KTW', 1, 1, 'TWQ', 2, 2),  # Même diagonale
+            ('MKT', 0, 0, 'TWQ', 2, 2),  # Même diagonale
+            ('KTW', 5, 1, 'TWQ', 6, 2)   # Même diagonale
+        ]
+        
+        # Appel à la fonction et vérification des hits trouvés
         self.assertCountEqual(find_double_hits(kmer_positions, max_distance), expected_hits)
+
+    def test_find_double_hits_not_same_diagonal(self):
+        """ Test pour les hits qui ne sont pas sur la même diagonale """
+        kmer_positions = {
+            'MKT': [(0, 0)],  # pos1=0, query_pos1=0
+            'KTW': [(2, 1)],  # pos1=2, query_pos1=1 (différence de diagonale pos1 - query_pos1 != pos2 - query_pos2)
+            'TWQ': [(4, 2)]   # pos1=4, query_pos1=2
+        }
+        
+        max_distance = 2
+        expected_hits = []  # Aucune paire ne devrait être retenue car les diagonales ne correspondent pas
+        
+        self.assertCountEqual(find_double_hits(kmer_positions, max_distance), expected_hits)
+
+    def test_find_double_hits_overlapping(self):
+        """ Test pour les hits qui se superposent """
+        kmer_positions = {
+            'MKT': [(0, 0)],  # pos1=0, query_pos1=0
+            'KTW': [(0, 0)],  # pos1=0, query_pos1=0 (se superpose complètement avec MKT)
+            'TWQ': [(2, 2)]   # pos1=2, query_pos1=2 (ne se superpose pas avec MKT)
+        }
+        
+        max_distance = 2
+        expected_hits = [('MKT', 0, 0, 'TWQ', 2, 2), ('KTW', 0, 0, 'TWQ', 2, 2)]  
+        
+        # 'MKT' et 'KTW' ne devraient pas être trouvés car ils se superposent
+        self.assertCountEqual(find_double_hits(kmer_positions, max_distance), expected_hits)
+
+    def test_extension_of_partial_hits(self):
+        """Test de l'extension des hits partiels"""
+        seq_query = "MKTWQ"
+        seq_target = "MKTGQ"
+        
+        double_hits = [('MKT', 0, 0, 'KTG', 1, 1)]  # Double hit avec mismatch
+        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, score_threshold=-5)
+        
+        # S'assurer que l'alignement partiel est détecté malgré le mismatch
+        self.assertGreater(len(alignments), 0, "Un alignement partiel devrait être trouvé même avec un mismatch.")
+
+
+    def test_alignment_with_gaps(self):
+        """
+        Test a case where the alignment should include gaps.
+        """
+        seq_query = "KVIILTAAAQGIGQAAALAFAREGAK--VIATDINESKLQELEKYPGIQTRVLDVTKKKQIDQFANEVE----RLDVLFNVAGFVHHGTVLDCEEKDWDFSMNLNVRSMYLMIKAFLPKMLAQKSGNIINMSSVASSVKGVVNRCVYSTTKAAVIGLTKSVAADFIQQGIRCNCVCPGTVDTPSLQERIQARGNPEEARNDFLKRQKTGRFATAEEIAMLCVYLASDESAYVTGNPVIIDGGWSL"
+        seq_target = "KVCAVFGGSRGIGRAVAQLMARKGYRLAVIARNLEGAKAAAGDLGGDHLAFSCDVAKEHDVQNTFEELEKHLGRVNFLVNAAGINRDGLLVRTKTEDMVSQLHTNLLGSMLTCKAAMRTMIQQQGGSIVNVGSIVGLKGNSGQSVYSASKGGLVGFSRALAKEVARKKIRVNVVAPGFVHTDMTKDLKEEHLKKNIPLGRFGETIEVAHAVVFLLESPYITGHVLVVDGGLQLIL"
+
+        # Test with double-hit and alignment extension
+        kmers = extract_kmers(seq_query, 3)
+        target_index = index_target_sequence(seq_target, 3)
+        kmer_positions = find_kmer_positions(kmers, target_index)
+        double_hits = find_double_hits(kmer_positions, max_distance=10)
+
+        # Extend alignment with gap penalties
+        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, score_threshold=-30)
+
+        # Expect an alignment with gaps
+        self.assertTrue(len(alignments) > 0, "No alignments with gaps were found")
+
+
+    def test_gapped_alignment(self):
+        """
+        Test to check that gaps are correctly inserted when needed.
+        """
+        seq_query = "KVIILTAAAQGIGQAAALAFAREGAKVIATDINESK"
+        seq_target = "KVCAVFGGSRGIGRAVAQLMARKGYRLAVIARNLEGAK"
+
+        # Expected alignment with gaps
+        expected_alignment = [
+            ('K', 'K'), ('V', 'V'), ('I', 'C'), ('I', 'A'), ('L', 'V'),
+            ('T', 'F'), ('A', 'G'), ('A', 'G'), ('A', 'S'), ('Q', 'R'),
+            ('G', 'G'), ('I', 'I'), ('G', 'G'), ('Q', 'R'), ('A', 'A'),
+            ('A', 'V'), ('A', 'A'), ('L', 'Q'), ('A', 'L'), ('F', 'M'),
+            ('A', 'A'), ('R', 'R'), ('E', 'K'), ('G', 'G'), ('A', 'Y'),
+            ('K', 'R'), ('-', 'L'), ('-', 'A'), ('V', 'V'), ('I', 'I'),
+            ('A', 'A'), ('T', 'R'), ('D', 'N'), ('I', 'L'), ('N', 'E'),
+            ('E', 'G'), ('S', 'A'), ('K', 'K')
+        ]
+
+        score, alignment = extend_alignment(seq_query, seq_target, 0, 0, self.blosum62)
+        print(f"Generated alignment: {alignment}")
+        print(f"Expected alignment: {expected_alignment}")
+
+        # Check that gaps are inserted correctly
+        self.assertEqual(alignment, expected_alignment)
+        display_alignment_with_gaps(alignment)
+
 
     def test_evaluate_double_hit(self):
         """ Test de la fonction evaluate_double_hit avec 3 cas : correspondance parfaite, mismatch et pénalité par défaut """
@@ -75,6 +174,31 @@ class TestBlastAlgorithm(unittest.TestCase):
                         get_blosum62_score('K', 'K', self.blosum62) +
                         -4)  # Pénalité par défaut pour 'J'
         self.assertEqual(evaluate_double_hit(kmer1, kmer2, self.blosum62), expected_score, "Le score pour un acide aminé inconnu est incorrect.")
+
+    def test_partial_alignment_with_gaps(self):
+        """ Test a case where the alignment should include gaps """
+        seq_query = "MKTW--Q"
+        seq_target = "MKTWQQQ"
+        
+        score, alignment = extend_alignment(seq_query, seq_target, 0, 0, self.blosum62)
+        
+        # Expecting a score that takes into account the gap penalties
+        expected_score = (
+            get_blosum62_score('M', 'M', self.blosum62) +
+            get_blosum62_score('K', 'K', self.blosum62) +
+            get_blosum62_score('T', 'T', self.blosum62) +
+            get_blosum62_score('W', 'W', self.blosum62) +
+            -11 + -2 +  # Gap penalties
+            get_blosum62_score('Q', 'Q', self.blosum62)
+        )
+        
+        self.assertEqual(score, expected_score)
+        self.assertEqual(alignment, [
+            ('M', 'M'), ('K', 'K'), ('T', 'T'), ('W', 'W'),
+            ('-', 'Q'), ('-', 'Q'), ('Q', 'Q')
+        ])
+
+
 
     def test_extend_alignment(self):
         seq_query = "MKTWQ"
@@ -146,22 +270,22 @@ class TestBlastAlgorithm(unittest.TestCase):
         # Exécution de l'algorithme complet
         kmers = extract_kmers(seq_query, 3)
         target_index = index_target_sequence(seq_target, 3)
-        print(f"K-mers: {kmers}")
+        #print(f"K-mers: {kmers}")
         
         kmer_positions = find_kmer_positions(kmers, target_index)
-        print(f"K-mer positions: {kmer_positions}")
+        #print(f"K-mer positions: {kmer_positions}")
         
         double_hits = find_double_hits(kmer_positions, 2)
-        print(f"Double-hits: {double_hits}")
+        #print(f"Double-hits: {double_hits}")
         
-        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, threshold=-5)
-        print(f"Alignments: {alignments}")
+        alignments = filter_alignments(double_hits, seq_query, seq_target, self.blosum62, score_threshold=-5)
+        #print(f"Alignments: {alignments}")
         
         e_values = calculate_e_values(alignments, seq_query, len_database)
-        print(f"E-values: {e_values}")
+        #print(f"E-values: {e_values}")
         
         filtered_alignments = filter_by_e_value(e_values, threshold=0.01)
-        print(f"Filtered Alignments: {filtered_alignments}")
+        #print(f"Filtered Alignments: {filtered_alignments}")
         
         # Vérification que l'alignement produit est correct et non vide
         self.assertTrue(len(filtered_alignments) > 0)
