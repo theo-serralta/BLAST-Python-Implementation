@@ -2,6 +2,8 @@ import math
 import numpy as np
 from Bio import SeqIO
 from Bio.SubsMat import MatrixInfo
+import concurrent.futures
+import time
 
 # Function to obtain the BLOSUM62 score for a pair of amino acids
 def get_blosum62_score(a, b, blosum_matrix):
@@ -136,7 +138,7 @@ def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
 
 # Extend a double-hit with gapped alignment
 def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
-                     gap_open_penalty=-11, gap_extension_penalty=-2, X_g=1000):
+                     gap_open_penalty=-11, gap_extension_penalty=-2, X_g=10000):
     """
     Extends a double-hit into an alignment, using Smith-Waterman for local alignment with gap handling.
     The extension is stopped if the score drops more than X_g below the best score.
@@ -451,8 +453,51 @@ def load_fasta_database(fasta_file):
         sequences.append(str(record.seq))
     return sequences
 
+def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database):
+    """Function to align one target sequence to the query."""
+    # Extract k-mers
+    kmers = extract_kmers(seq_query, k)
+    target_index = index_target_sequence(seq_target, k)
+    kmer_positions = find_kmer_positions(kmers, target_index)
+    double_hits = find_double_hits(kmer_positions, max_distance)
+    
+    # Filter and align
+    alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, bit_score_threshold)
+    alignments = filter_duplicate_alignments(alignments)
+    e_values = calculate_e_values(alignments, seq_query, len_database)
+    
+    # Filter based on E-value
+    significant_alignments = filter_by_e_value(e_values, threshold=0.00001)
+    
+    if significant_alignments:
+        return alignments, e_values
+    return None
+
+def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads):
+    """Run alignment in parallel using multiple processes."""
+    len_database = sum(len(seq) for seq in database_sequences)
+    
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
+        # Submit tasks for parallel processing
+        future_to_sequence = {
+            executor.submit(align_sequence, seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database): seq_target
+            for seq_target in database_sequences
+        }
+
+        for future in concurrent.futures.as_completed(future_to_sequence):
+            seq_target = future_to_sequence[future]
+            try:
+                result = future.result()
+                if result:
+                    alignments, e_values = result
+                    display_blast_like_results(alignments, e_values, seq_query, seq_target)
+            except Exception as exc:
+                print(f"Generated an exception for {seq_target}: {exc}")
+
 # Example usage with FASTA database
 if __name__ == "__main__":
+    start = time.time()
+
     seq_query = "MGRLDGKVIILTAAAQGIGQAAALAFAREGAKVIATDINESKLQELEKYPGIQTRVLDVTKKKQIDQFANEVERLDVLFNVAGFVHHGTVLDCEEKDWDFSMNLNVRSMYLMIKAFLPKMLAQKSGNIINMSSVASSVKGVVNRCVYSTTKAAVIGLTKSVAADFIQQGIRCNCVCPGTVDTPSLQERIQARGNPEEARNDFLKRQKTGRFATAEEIAMLCVYLASDESAYVTGNPVIIDGGWSL"
     #seq_query = "ADEPILVA"
     blosum62 = MatrixInfo.blosum62
@@ -460,6 +505,8 @@ if __name__ == "__main__":
     k = 3
     max_distance = 40
     bit_score_threshold = 22  # Seuil basé sur le bit score
+    num_threads = 7  # Nombre de threads
+
     
     fasta_file = "subset_2000_sequences.fasta"
     database_sequences = load_fasta_database(fasta_file)
@@ -467,33 +514,8 @@ if __name__ == "__main__":
     #database_sequences = ["MGRLDGKVIILTAAAQGIGQAAALAFAREGAKVIATDINESKLQELEKYPGIQTRVLDVTKKKQIDQFANEVERLDVLFNVAGFVHHGTVLDCEEKDWDFSMNLNVRSMYLMIKAFLPKMLAQKSGNIINMSSVASSVKGVVNRCVYSTTKAAVIGLTKSVAADFIQQGIRCNCVCPGTVDTPSLQERIQARGNPEEARNDFLKRQKTGRFATAEEIAMLCVYLASDESAYVTGNPVIIDGGWSL"]
     #database_sequences = ["ADEPILVA"]
 
-    len_database = sum(len(seq) for seq in database_sequences)
-    kmers = extract_kmers(seq_query, k)
+    # Run alignments in parallel with specified number of threads
+    run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads)
 
-    for i, seq_target in enumerate(database_sequences):
-            # Step 1: Check if the query is identical to the target
-            if seq_query == seq_target:
-                # Directly process identical sequences with perfect alignment
-                perfect_alignment = list(zip(seq_query, seq_target))  # Perfect alignment with no gaps
-                raw_score = sum(get_blosum62_score(q, t, blosum62) for q, t in perfect_alignment)  # Perfect score
-                bit_score = calculate_bit_score(raw_score)  # Convert to bit score
-                e_value = calculate_e_value_from_bitscore(bit_score, len(seq_query), len_database)  # Calculate E-value
-
-                print("Perfect alignment detected (query == target).")
-                display_blast_like_results([(raw_score, perfect_alignment)], [(e_value, raw_score, perfect_alignment)], seq_query, seq_target)
-                continue  # Skip to the next target
-
-            # Step 2: Continue with the regular alignment process if sequences are different
-            print(i)
-            target_index = index_target_sequence(seq_target, k)
-            kmer_positions = find_kmer_positions(kmers, target_index)
-            double_hits = find_double_hits(kmer_positions, max_distance)
-            alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, bit_score_threshold)  # Utilisation du threshold basé sur le bit score
-            #print(f"nombre d'alignement avant filtre : {len(alignments)}")
-            alignments = filter_duplicate_alignments(alignments)
-            #print(f"nombre d'alignement après filtre : {len(alignments)}")
-            e_values = calculate_e_values(alignments, seq_query, len_database)
-            significant_alignments = filter_by_e_value(e_values, threshold=0.00001)
-
-            if significant_alignments:
-                display_blast_like_results(alignments, e_values, seq_query, seq_target)
+    end = time.time()
+    print(f"Temps total pour {num_threads} coeurs = {end - start} sec")
