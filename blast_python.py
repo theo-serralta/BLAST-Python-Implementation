@@ -159,26 +159,32 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
     
     m, n = len(seq_query), len(seq_target)
     
-    # Initialize score and traceback matrices
-    score_matrix = np.zeros((m + 1, n + 1))
-    traceback_matrix = np.zeros((m + 1, n + 1), dtype=int)
+    # Initialize current and previous score rows
+    previous_row = np.zeros(n + 1)
+    current_row = np.zeros(n + 1)
+    traceback_matrix = np.zeros((m + 1, n + 1), dtype=int)  # Still need full traceback matrix for recovery
     
     # Initialize best score tracking
     max_score = 0
-    best_score = 0
     max_pos = (0, 0)
 
-    # Fill the score matrix using Smith-Waterman logic
     for i in range(1, m + 1):
         for j in range(1, n + 1):
-            match = score_matrix[i - 1][j - 1] + get_blosum62_score(seq_query[i - 1], seq_target[j - 1], blosum_matrix)
-            gap_query = score_matrix[i][j - 1] + (gap_extension_penalty if traceback_matrix[i][j - 1] == 2 else gap_open_penalty)
-            gap_target = score_matrix[i - 1][j] + (gap_extension_penalty if traceback_matrix[i - 1][j] == 1 else gap_open_penalty)
+            # Ensure valid BLOSUM62 score calculation
+            try:
+                match = previous_row[j - 1] + get_blosum62_score(seq_query[i - 1], seq_target[j - 1], blosum_matrix)
+            except KeyError:
+                match = -4  # Default mismatch penalty for unknown pairs
+
+            # Handle gap penalties (gap in query or gap in target)
+            gap_query = current_row[j - 1] + (gap_extension_penalty if traceback_matrix[i][j - 1] == 2 else gap_open_penalty)
+            gap_target = previous_row[j] + (gap_extension_penalty if traceback_matrix[i - 1][j] == 1 else gap_open_penalty)
 
             # Calculate best score for the current cell
             current_score = max(0, match, gap_query, gap_target)
-            score_matrix[i][j] = current_score
+            current_row[j] = current_score
 
+            # Update traceback matrix
             if current_score == match:
                 traceback_matrix[i][j] = 0  # Diagonal (match/mismatch)
             elif current_score == gap_query:
@@ -192,15 +198,17 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
                 max_pos = (i, j)
 
             # Check if current score has dropped more than X_g below max_score
-            #print(current_score, max_score)
             if max_score - current_score > X_g:
                 break  # Stop the extension if score drops too much
 
-    # Traceback to recover the alignment
+        # Swap rows: move current_row to previous_row, and reset current_row
+        previous_row, current_row = current_row, np.zeros(n + 1)
+
+    # Traceback to recover the alignment (this part doesn't use the score matrix directly)
     aligned_query, aligned_target = [], []
     i, j = max_pos
 
-    while score_matrix[i][j] > 0:
+    while i > 0 and j > 0 and traceback_matrix[i][j] != -1:  # Ensure valid bounds and traceback
         if traceback_matrix[i][j] == 0:
             aligned_query.append(seq_query[i - 1])
             aligned_target.append(seq_target[j - 1])
@@ -215,19 +223,17 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
             aligned_target.append(seq_target[j - 1])
             j -= 1
 
-    # Since traceback traverses in reverse, we need to reverse the results
     aligned_query = aligned_query[::-1]
     aligned_target = aligned_target[::-1]
-
-    # Combine the results into a final alignment
     final_alignment = list(zip(aligned_query, aligned_target))
 
     return max_score, final_alignment
 
-# Filter alignments by score
+# Filter alignments by score with distance selection
 def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, bit_score_threshold):
     """
-    Filtre et étend les alignements basés sur les double-hits détectés, avec un seuil basé sur le bit score.
+    Filtre et étend les alignements basés sur les double-hits détectés,
+    en sélectionnant uniquement le double-hit avec la plus grande distance entre k-mers.
 
     Args:
         double_hits (list): Liste des double-hits détectés.
@@ -237,22 +243,36 @@ def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, bit_sco
         bit_score_threshold (float): Seuil pour filtrer les alignements basés sur le bit score.
 
     Returns:
-        list: Liste des alignements filtrés.
+        list: Liste des alignements filtrés (un seul alignement par séquence).
     """
     alignments = []
-    score_value = []
-    #print("==================Entering filter_alignments=================")
+    
+    # Si aucun double-hit n'est détecté, on retourne une liste vide
+    if not double_hits:
+        return alignments
+
+    # On trouve le double-hit avec la plus grande distance
+    best_hit = None
+    max_distance = 0
+
     for hit in double_hits:
         kmer1, pos1, query_pos1, kmer2, pos2, query_pos2 = hit
-        initial_score = evaluate_double_hit(kmer1, kmer2, blosum_matrix)
-        if initial_score not in score_value:
-            score_value.append(initial_score)
-            if initial_score <= 0:  # Conserver uniquement les alignements avec un score initial negatif
-                #print(f"initial_score = {initial_score}")
-                score, alignment = extend_alignment(seq_query, seq_target, query_pos1, pos1, blosum_matrix, gap_open_penalty=-11, gap_extension_penalty=-2)
-                bit_score = calculate_bit_score(score)
-                if bit_score >= bit_score_threshold:
-                    alignments.append((score, alignment))
+        distance = abs(pos2 - pos1)
+        
+        if distance > max_distance:
+            max_distance = distance
+            best_hit = hit
+
+    # Si on a trouvé un meilleur double-hit
+    if best_hit:
+        # On étend l'alignement à partir de ce double-hit
+        kmer1, pos1, query_pos1, kmer2, pos2, query_pos2 = best_hit
+        score, alignment = extend_alignment(seq_query, seq_target, query_pos1, pos1, blosum_matrix, gap_open_penalty=-11, gap_extension_penalty=-2)
+        bit_score = calculate_bit_score(score)
+        
+        if bit_score >= bit_score_threshold:
+            alignments.append((score, alignment))
+
     return alignments
 
 def filter_duplicate_alignments(alignments):
@@ -505,7 +525,7 @@ if __name__ == "__main__":
     k = 3
     max_distance = 40
     bit_score_threshold = 22  # Seuil basé sur le bit score
-    num_threads = 7  # Nombre de threads
+    num_threads = 6  # Nombre de threads
 
     
     fasta_file = "subset_2000_sequences.fasta"
