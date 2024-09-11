@@ -10,7 +10,7 @@ Date: 11/11/2024
 
 Dependencies:
     - Python 3.x
-    - Biopython 1.78 (e.g., `pip install biopython`)
+    - Biopython 1.78 (e.g., `pip install biopython==1.78`)
     - Numpy (e.g., `pip install numpy`)
 
     I recommend using my Conda environment available on the project's GIT.
@@ -127,6 +127,39 @@ def parse_arguments():
         print(f"Error parsing arguments: {err}")
         sys.exit(1)
 
+#Function to load query sequence fasta
+def load_query_sequence(fasta_file):
+    """
+    Load the query sequence from a FASTA file.
+
+    Args:
+        fasta_file (str): Path to the FASTA file.
+    
+    Returns:
+        str: The query sequence.
+    """
+    # Parse the FASTA file and retrieve the first sequence entry
+    record = next(SeqIO.parse(fasta_file, "fasta"))
+    
+    # Convert the sequence into a string and return it
+    return str(record.seq)
+
+# Function to load sequences from a FASTA database
+def load_fasta_database(fasta_file):
+    """
+    Load sequences from a FASTA file to use as a database.
+
+    Args:
+        fasta_file (str): Path to the FASTA file.
+    
+    Returns:
+        list: List of sequences from the file.
+    """
+    sequences = []  # Initialize an empty list to store sequences
+    # Parse the FASTA file using SeqIO and extract each sequence
+    for record in SeqIO.parse(fasta_file, "fasta"):
+        sequences.append(str(record.seq))  # Convert the sequence to a string and append to the list
+    return sequences  # Return the list of sequences
 
 # Function to obtain the BLOSUM62 score for a pair of amino acids
 def get_blosum62_score(a, b, blosum_matrix):
@@ -667,130 +700,6 @@ def sort_output_file(output_file):
         for alignment in alignments:
             f.writelines(alignment)  # Write each sorted alignment block
 
-# Function to load sequences from a FASTA database
-def load_fasta_database(fasta_file):
-    """
-    Load sequences from a FASTA file to use as a database.
-
-    Args:
-        fasta_file (str): Path to the FASTA file.
-    
-    Returns:
-        list: List of sequences from the file.
-    """
-    sequences = []  # Initialize an empty list to store sequences
-    # Parse the FASTA file using SeqIO and extract each sequence
-    for record in SeqIO.parse(fasta_file, "fasta"):
-        sequences.append(str(record.seq))  # Convert the sequence to a string and append to the list
-    return sequences  # Return the list of sequences
-
-# Function to align a target sequence to the query sequence
-def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, output_file):
-    """
-    Perform alignment of a target sequence to the query sequence.
-
-    Args:
-        seq_target (str): Target sequence.
-        seq_query (str): Query sequence.
-        k (int): K-mer length.
-        max_distance (int): Maximum allowed distance for double-hits.
-        blosum62 (dict): BLOSUM62 matrix.
-        bit_score_threshold (float): Bit score threshold.
-        len_database (int): Length of the database.
-        output_file (str): Path to save the alignment output.
-    
-    Returns:
-        tuple: Alignments and E-values if any alignments are found.
-    """
-    # Step 1: Extract k-mers from the query sequence
-    kmers = extract_kmers(seq_query, k)
-
-    # Step 2: Index the target sequence by k-mers
-    target_index = index_target_sequence(seq_target, k)
-
-    # Step 3: Find positions of matching k-mers between query and target
-    kmer_positions = find_kmer_positions(kmers, target_index)
-
-    # Step 4: Detect double-hits (pairs of matching k-mers on the same diagonal)
-    double_hits = find_double_hits(kmer_positions, max_distance)
-
-    # Step 5: Filter and extend alignments based on detected double-hits
-    alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, bit_score_threshold)
-
-    # Step 6: Remove any duplicate alignments
-    alignments = filter_duplicate_alignments(alignments)
-
-    # Step 7: Calculate E-values for the alignments
-    e_values = calculate_e_values(alignments, seq_query, len_database)
-
-    # Step 8: Filter the alignments based on the E-value threshold
-    significant_alignments = filter_by_e_value(e_values, e_value_threshold)
-
-    # Return the significant alignments and E-values if found, otherwise return None
-    if significant_alignments:
-        return alignments, e_values
-    return None
-
-# Function to run alignments in parallel using multiple threads
-def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output_file):
-    """
-    Run alignments in parallel across multiple threads.
-
-    Args:
-        seq_query (str): Query sequence.
-        database_sequences (list): List of database sequences.
-        k (int): K-mer length.
-        max_distance (int): Maximum distance for double-hits.
-        blosum62 (dict): BLOSUM62 matrix.
-        bit_score_threshold (float): Bit score threshold.
-        num_threads (int): Number of threads for parallel processing.
-        e_value_threshold (float): E-value threshold.
-        output_file (str): Output file to save results.
-    """
-    # Step 1: Calculate the total length of the database (sum of all target sequence lengths)
-    len_database = sum(len(seq) for seq in database_sequences)
-
-    # Step 2: Initialize a process pool for parallel execution, limiting to the number of threads specified
-    with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
-
-        # Step 3: Submit alignment tasks to the pool
-        # Each target sequence is aligned to the query in parallel
-        future_to_sequence = {
-            executor.submit(align_sequence, seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, e_value_threshold): seq_target
-            for seq_target in database_sequences
-        }
-
-        # Step 4: Process the results as they complete
-        for future in concurrent.futures.as_completed(future_to_sequence):
-            seq_target = future_to_sequence[future]
-            try:
-                # Retrieve the result from the completed task
-                result = future.result()
-
-                # If valid alignments are found, display and save the results
-                if result:
-                    alignments, e_values = result
-                    display_blast_like_results(alignments, e_values, seq_query, seq_target, output_file)
-            except Exception as exc:
-                # If an exception occurs during alignment, log the error
-                print(f"Generated an exception for {seq_target}: {exc}")
-
-def load_query_sequence(fasta_file):
-    """
-    Load the query sequence from a FASTA file.
-
-    Args:
-        fasta_file (str): Path to the FASTA file.
-    
-    Returns:
-        str: The query sequence.
-    """
-    # Parse the FASTA file and retrieve the first sequence entry
-    record = next(SeqIO.parse(fasta_file, "fasta"))
-    
-    # Convert the sequence into a string and return it
-    return str(record.seq)
-
 def run_blastx(query_fasta, protein_db, output_file, e_value_threshold=0.001, outfmt=6):
     """
     Run BLASTX using the query sequence against a protein database.
@@ -863,6 +772,98 @@ def parse_blast_results(blast_xml_file):
                     print(hsp.query[0:75] + "...")
                     print(hsp.match[0:75] + "...")
                     print(hsp.sbjct[0:75] + "...\n")
+
+# Function to run alignments in parallel using multiple threads
+def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output_file):
+    """
+    Run alignments in parallel across multiple threads.
+
+    Args:
+        seq_query (str): Query sequence.
+        database_sequences (list): List of database sequences.
+        k (int): K-mer length.
+        max_distance (int): Maximum distance for double-hits.
+        blosum62 (dict): BLOSUM62 matrix.
+        bit_score_threshold (float): Bit score threshold.
+        num_threads (int): Number of threads for parallel processing.
+        e_value_threshold (float): E-value threshold.
+        output_file (str): Output file to save results.
+    """
+    # Step 1: Calculate the total length of the database (sum of all target sequence lengths)
+    len_database = sum(len(seq) for seq in database_sequences)
+
+    # Step 2: Initialize a process pool for parallel execution, limiting to the number of threads specified
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
+
+        # Step 3: Submit alignment tasks to the pool
+        # Each target sequence is aligned to the query in parallel
+        future_to_sequence = {
+            executor.submit(align_sequence, seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, e_value_threshold): seq_target
+            for seq_target in database_sequences
+        }
+
+        # Step 4: Process the results as they complete
+        for future in concurrent.futures.as_completed(future_to_sequence):
+            seq_target = future_to_sequence[future]
+            try:
+                # Retrieve the result from the completed task
+                result = future.result()
+
+                # If valid alignments are found, display and save the results
+                if result:
+                    alignments, e_values = result
+                    display_blast_like_results(alignments, e_values, seq_query, seq_target, output_file)
+            except Exception as exc:
+                # If an exception occurs during alignment, log the error
+                print(f"Generated an exception for {seq_target}: {exc}")
+
+# Function to align a target sequence to the query sequence
+def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, output_file):
+    """
+    Perform alignment of a target sequence to the query sequence.
+
+    Args:
+        seq_target (str): Target sequence.
+        seq_query (str): Query sequence.
+        k (int): K-mer length.
+        max_distance (int): Maximum allowed distance for double-hits.
+        blosum62 (dict): BLOSUM62 matrix.
+        bit_score_threshold (float): Bit score threshold.
+        len_database (int): Length of the database.
+        output_file (str): Path to save the alignment output.
+    
+    Returns:
+        tuple: Alignments and E-values if any alignments are found.
+    """
+    # Step 1: Extract k-mers from the query sequence
+    kmers = extract_kmers(seq_query, k)
+
+    # Step 2: Index the target sequence by k-mers
+    target_index = index_target_sequence(seq_target, k)
+
+    # Step 3: Find positions of matching k-mers between query and target
+    kmer_positions = find_kmer_positions(kmers, target_index)
+
+    # Step 4: Detect double-hits (pairs of matching k-mers on the same diagonal)
+    double_hits = find_double_hits(kmer_positions, max_distance)
+
+    # Step 5: Filter and extend alignments based on detected double-hits
+    alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, bit_score_threshold)
+
+    # Step 6: Remove any duplicate alignments
+    alignments = filter_duplicate_alignments(alignments)
+
+    # Step 7: Calculate E-values for the alignments
+    e_values = calculate_e_values(alignments, seq_query, len_database)
+
+    # Step 8: Filter the alignments based on the E-value threshold
+    significant_alignments = filter_by_e_value(e_values, e_value_threshold)
+
+    # Return the significant alignments and E-values if found, otherwise return None
+    if significant_alignments:
+        return alignments, e_values
+    return None
+
 
 if __name__ == "__main__":
     # Parse command-line arguments for method, input/output files, and parameters
