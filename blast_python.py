@@ -1,15 +1,59 @@
+"""
+Filename: blast_python.py
+Description: This script implements a custom version of BLASTP, and utilizes Biopython 
+             for running BLASTX and BLASTN. The custom BLASTP algorithm includes k-mer extraction, 
+             diagonal double-hit detection, and gapped alignment extension. BLASTX and BLASTN 
+             functionalities leverage Biopython's integration with the BLAST+ command line tools.
+
+Author: SERRALTA Theo
+Date: 11/11/2024
+
+Dependencies:
+    - Python 3.x
+    - Biopython 1.78 (e.g., `pip install biopython`)
+    - Numpy (e.g., `pip install numpy`)
+
+    I recommend using my Conda environment available on the project's GIT.
+
+Usage:
+    To run the custom BLASTP algorithm:
+        $ python blast_python.py -m blastp -q query.fasta -d database.fasta -o output.txt
+    
+    To run BLASTN with a query file and a nucleotide database (using Biopython):
+        $ python blast_python.py -m blastn -q query.fasta -d database.fasta -o output.txt
+    
+    To run BLASTX with a query file and a protein database (using Biopython):
+        $ python blast_python.py -m blastx -q query.fasta -d database.fasta -o output.txt
+    
+    Arguments:
+        -m, --method         : The BLAST method to use (blastp, blastn, blastx).
+        -q, --query          : Path to the query sequence file.
+        -d, --database       : Path to the database sequence file.
+        -o, --output         : Path to the output file.
+        -e, --evalue         : E-value threshold (default: 0.001).
+        -f, --outfmt         : Output format (default: 6).
+        -k, --k              : K-mer length for the custom BLASTP.
+        -w, --max_distance   : Maximum distance for double hits in the custom BLASTP.
+        -b, --bit_score_threshold : Bit score threshold for the custom BLASTP.
+        -t, --threads        : Number of threads for parallel processing.
+
+License:
+    MIT license
+"""
+
+import os
 import math
+import sys
+import time
+import getopt
+import concurrent.futures
 import numpy as np
 from Bio import SeqIO
 from Bio.SubsMat import MatrixInfo
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-import concurrent.futures
-import time
 from Bio.Blast.Applications import NcbiblastnCommandline
 from Bio.Blast import NCBIXML
-import getopt
-import sys
 
 
 def parse_arguments():
@@ -21,17 +65,17 @@ def parse_arguments():
     Returns:
     --------
     tuple
-        A tuple containing all the parsed arguments needed for the program:
-        - method : str : Method to run (blastp, blastn, blastx)
-        - query : str : Path to the query sequence file
-        - database : str : Path to the database sequence file
-        - output : str : Path to the output file
-        - e_value_threshold : float : E-value threshold for BLAST
-        - outfmt : int : Output format for BLAST
-        - k : int : K-mer length for custom blastp
-        - max_distance : int : Max distance for double hits in blastp
-        - bit_score_threshold : float : Bit score threshold for custom blastp
-        - num_threads : int : Number of threads for parallel processing
+        Returns a tuple containing:
+        - method : str : The method to use (blastp, blastn, blastx)
+        - query : str : The query sequence file path
+        - database : str : The database file path
+        - output : str : The output file path
+        - e_value_threshold : float : The E-value threshold for filtering alignments
+        - outfmt : int : The output format (default is 6)
+        - k : int : K-mer size for custom blastp
+        - max_distance : int : Maximum distance between k-mer hits for double-hit detection
+        - bit_score_threshold : float : Threshold for filtering alignments based on the bit score
+        - num_threads : int : Number of threads for parallel execution
     """
     try:
         opts, args = getopt.getopt(sys.argv[1:], "m:q:d:o:e:f:k:w:b:t:", 
@@ -83,15 +127,15 @@ def parse_arguments():
 # Function to obtain the BLOSUM62 score for a pair of amino acids
 def get_blosum62_score(a, b, blosum_matrix):
     """
-    Returns the BLOSUM62 score for a pair of amino acids.
+    Get the BLOSUM62 score for a pair of amino acids.
 
     Args:
         a (str): First amino acid.
         b (str): Second amino acid.
-        blosum_matrix (dict): BLOSUM62 matrix loaded via Biopython.
-
+        blosum_matrix (dict): The BLOSUM62 substitution matrix.
+    
     Returns:
-        int: The score of the amino acid pair or -4 if the pair does not exist.
+        int: The BLOSUM62 score of the amino acid pair.
     """
     if (a, b) in blosum_matrix:
         return blosum_matrix[(a, b)]
@@ -103,14 +147,14 @@ def get_blosum62_score(a, b, blosum_matrix):
 # K-mer extraction
 def extract_kmers(sequence, k):
     """
-    Extracts k-mers from a given sequence.
+    Extract k-mers from a sequence.
 
     Args:
         sequence (str): The sequence to process.
         k (int): The length of the k-mers.
-
+    
     Returns:
-        list: List of tuples containing the k-mer and its position.
+        list: A list of tuples containing k-mers and their positions.
     """
     kmers = []
     for i in range(len(sequence) - k + 1):
@@ -121,14 +165,14 @@ def extract_kmers(sequence, k):
 # Indexing the target sequence for fast k-mer search
 def index_target_sequence(sequence, k):
     """
-    Indexes a target sequence by k-mers for fast searching.
+    Find positions of k-mers in the target sequence using an index.
 
     Args:
-        sequence (str): Target sequence to index.
-        k (int): Length of the k-mers.
-
+        kmers (list): List of k-mers from the query sequence.
+        target_index (dict): Precomputed index of the target sequence.
+    
     Returns:
-        dict: Dictionary where keys are k-mers and values are positions in the sequence.
+        dict: Dictionary of k-mer positions in both query and target sequences.
     """
     kmer_index = {}
     for i in range(len(sequence) - k + 1):
@@ -162,17 +206,14 @@ def find_kmer_positions(kmers, target_index):
 # Function to find double-hits on the same diagonal and without strict overlap
 def find_double_hits(kmer_positions, max_distance):
     """
-    Identifies double-hits in the target sequence.
-
-    Double-hits are pairs of k-mers on the same diagonal, that do not overlap,
-    and whose distance is less than a defined threshold.
+    Identify double-hits between the query and target sequences.
 
     Args:
-        kmer_positions (dict): Positions of k-mers in the target sequence.
-        max_distance (int): Maximum allowed distance between two hits to be considered a double-hit.
-
+        kmer_positions (dict): The positions of k-mers in the target sequence.
+        max_distance (int): Maximum allowable distance between two k-mers for a double-hit.
+    
     Returns:
-        list: List of tuples representing the detected double-hits.
+        list: A list of double-hit positions.
     """
     double_hits = []
     kmer_list = list(kmer_positions.items())
@@ -196,13 +237,13 @@ def find_double_hits(kmer_positions, max_distance):
 # Function to evaluate the initial score of a double-hit
 def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
     """
-    Calculates the initial score of a double-hit based on the BLOSUM62 matrix.
+    Calculate the score of a double-hit using the BLOSUM62 matrix.
 
     Args:
         kmer1 (str): First k-mer.
         kmer2 (str): Second k-mer.
-        blosum_matrix (dict): BLOSUM62 matrix.
-
+        blosum_matrix (dict): The BLOSUM62 matrix.
+    
     Returns:
         int: The score of the double-hit.
     """
@@ -215,23 +256,21 @@ def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
 def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
                      gap_open_penalty=-11, gap_extension_penalty=-2, X_g=1000000):
     """
-    Extends a double-hit into an alignment, using Smith-Waterman for local alignment with gap handling.
-    The extension is stopped if the score drops more than X_g below the best score.
+    Extend a double-hit into a full alignment using Smith-Waterman local alignment.
 
     Args:
-        seq_query (str): Query sequence.
-        seq_target (str): Target sequence.
-        query_pos (int): Hit position in the query sequence.
-        target_pos (int): Hit position in the target sequence.
-        blosum_matrix (dict): BLOSUM62 matrix.
-        gap_open_penalty (int): Penalty for gap opening.
-        gap_extension_penalty (int): Penalty for gap extension.
-        X_g (int): Threshold for score drop before stopping the extension.
-
-    Returns:
-        tuple: The alignment score and the alignment itself as a list of tuples.
-    """
+        seq_query (str): The query sequence.
+        seq_target (str): The target sequence.
+        query_pos (int): Position of the query hit.
+        target_pos (int): Position of the target hit.
+        blosum_matrix (dict): The BLOSUM62 substitution matrix.
+        gap_open_penalty (int): Penalty for opening a gap in the alignment.
+        gap_extension_penalty (int): Penalty for extending a gap.
+        X_g (int): Maximum score drop to stop extension.
     
+    Returns:
+        tuple: Alignment score and the final alignment.
+    """
     m, n = len(seq_query), len(seq_target)
     
     # Initialize current and previous score rows
@@ -308,18 +347,17 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
 # Filter alignments by score with distance selection
 def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, bit_score_threshold):
     """
-    Filtre et étend les alignements basés sur les double-hits détectés,
-    en sélectionnant uniquement le double-hit avec la plus grande distance entre k-mers.
+    Filter and extend alignments based on double-hits.
 
     Args:
-        double_hits (list): Liste des double-hits détectés.
-        seq_query (str): Séquence query.
-        seq_target (str): Séquence target.
-        blosum_matrix (dict): Matrice BLOSUM62.
-        bit_score_threshold (float): Seuil pour filtrer les alignements basés sur le bit score.
-
+        double_hits (list): The detected double-hits.
+        seq_query (str): The query sequence.
+        seq_target (str): The target sequence.
+        blosum_matrix (dict): The BLOSUM62 matrix.
+        bit_score_threshold (float): Bit score threshold for filtering alignments.
+    
     Returns:
-        list: Liste des alignements filtrés (un seul alignement par séquence).
+        list: List of filtered alignments.
     """
     alignments = []
     
@@ -353,13 +391,13 @@ def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, bit_sco
 
 def filter_duplicate_alignments(alignments):
     """
-    Filters out duplicate alignments, keeping only unique ones.
+    Remove duplicate alignments based on positions.
 
     Args:
         alignments (list): List of alignments.
-
+    
     Returns:
-        list: List of unique alignments.
+        list: Unique alignments with duplicates removed.
     """
     unique_alignments = []
     seen_positions = set()
@@ -377,45 +415,45 @@ def filter_duplicate_alignments(alignments):
 # Fonction pour calculer le bit score
 def calculate_bit_score(raw_score, lambda_param=0.318, K=0.134):
     """
-    Calcule le bit score à partir du score brut.
-    
-    Args:
-        raw_score (int): Score brut (raw score).
-        lambda_param (float): Paramètre lambda pour la distribution des scores.
-        K (float): Paramètre K pour la distribution des scores.
+    Calculate the bit score from a raw score.
 
+    Args:
+        raw_score (int): Raw alignment score.
+        lambda_param (float): Lambda parameter for scoring.
+        K (float): K parameter for scoring.
+    
     Returns:
-        float: Le bit score.
+        float: The calculated bit score.
     """
     return (lambda_param * raw_score - math.log(K)) / math.log(2)
 
 # Calculate E-value from score
 def calculate_e_value_from_bitscore(bit_score, m, n):
     """
-    Calcule l'E-value à partir du bit score.
+    Calculate the E-value from a bit score.
 
     Args:
-        bit_score (float): Le bit score de l'alignement.
-        m (int): Longueur de la séquence query.
-        n (int): Longueur totale de la base de données.
-
+        bit_score (float): The bit score.
+        m (int): Length of the query sequence.
+        n (int): Total length of the database.
+    
     Returns:
-        float: E-value calculée.
+        float: The calculated E-value.
     """
     return m * n * math.pow(2, -bit_score)
 
 # Calculate E-values for all alignments
 def calculate_e_values(alignments, seq_query, len_database):
     """
-    Calcule les E-values pour une liste d'alignements en utilisant les bit scores.
+    Calculate E-values for all alignments.
 
     Args:
-        alignments (list): Liste des alignements avec leur score brut.
-        seq_query (str): Séquence de la query.
-        len_database (int): Longueur totale de la base de données.
-
+        alignments (list): List of alignments with their scores.
+        seq_query (str): The query sequence.
+        len_database (int): Total length of the database.
+    
     Returns:
-        list: Liste des E-values associées à chaque alignement.
+        list: List of tuples containing E-values, scores, and alignments.
     """
     e_values = []
     m = len(seq_query)
@@ -431,14 +469,14 @@ def calculate_e_values(alignments, seq_query, len_database):
 # Filter alignments by E-value
 def filter_by_e_value(e_values, e_value_threshold):
     """
-    Filters alignments based on an E-value threshold.
+    Filter alignments based on an E-value threshold.
 
     Args:
         e_values (list): List of alignments with their E-values.
-        threshold (float): E-value threshold for filtering alignments.
-
+        e_value_threshold (float): E-value threshold.
+    
     Returns:
-        list: List of significant alignments with E-value below the threshold.
+        list: Filtered alignments with E-value below the threshold.
     """
     filtered_alignments = [align for align in e_values if align[0] <= e_value_threshold]
     return filtered_alignments
@@ -446,15 +484,15 @@ def filter_by_e_value(e_values, e_value_threshold):
 # Function to format the alignment for BLAST-like display
 def format_alignment(seq_query, seq_target, alignment):
     """
-    Formats an alignment for BLAST-style display.
+    Format an alignment for BLAST-like display.
 
     Args:
-        seq_query (str): Query sequence.
-        seq_target (str): Target sequence.
-        alignment (list): Alignment to format.
-
+        seq_query (str): The query sequence.
+        seq_target (str): The target sequence.
+        alignment (list): The alignment.
+    
     Returns:
-        tuple: Formatted strings for the query, match line, and target.
+        tuple: Formatted query, match line, and target sequence strings.
     """
     query_aligned = []
     target_aligned = []
@@ -480,14 +518,14 @@ def format_alignment(seq_query, seq_target, alignment):
 # Display formatted alignment results
 def display_blast_like_results(alignments, e_values, seq_query, seq_target, output_file):
     """
-    Displays the alignment results in a BLAST-like format, including score, E-value, identities, positives, and gaps.
+    Display alignment results in a BLAST-like format.
 
     Args:
-        alignments (list): List of alignments with their score.
-        e_values (list): List of E-values associated with the alignments.
+        alignments (list): List of alignments.
+        e_values (list): List of E-values.
         seq_query (str): The query sequence.
         seq_target (str): The target sequence.
-        output_file (str): Path to the output file where the results will be written.
+        output_file (str): Path to the output file.
     """
     # Parameters for formatting
     line_length = 60  # Number of characters per line in the alignment display
@@ -535,10 +573,10 @@ def display_blast_like_results(alignments, e_values, seq_query, seq_target, outp
 
 def sort_output_file(output_file):
     """
-    Reads the output file, sorts the alignments by E-value, and rewrites the sorted results back to the file.
-    
+    Sort the output file by E-value and overwrite with sorted results.
+
     Args:
-        output_file (str): Path to the BLAST output file to be sorted.
+        output_file (str): The file to be sorted.
     """
     with open(output_file, "r") as f:
         lines = f.readlines()
@@ -561,6 +599,15 @@ def sort_output_file(output_file):
 
     # Sort alignments by the E-value, ensuring that we only sort those that have an "Expect =" line
     def extract_evalue(alignment):
+        """
+        Extracts the E-value from an alignment block.
+
+        Args:
+            alignment (list): A list of lines representing an alignment block.
+
+        Returns:
+            float: The E-value extracted from the alignment, or infinity if no E-value is found.
+        """
         for line in alignment:
             if "Expect" in line:
                 try:
@@ -577,16 +624,17 @@ def sort_output_file(output_file):
     with open(output_file, "w") as f:
         for alignment in alignments:
             f.writelines(alignment)
+
 # Function to load FASTA database
 def load_fasta_database(fasta_file):
     """
-    Loads a FASTA database from a file.
+    Load sequences from a FASTA file to use as a database.
 
     Args:
         fasta_file (str): Path to the FASTA file.
-
+    
     Returns:
-        list: List of sequences in the database.
+        list: List of sequences from the file.
     """
     sequences = []
     for record in SeqIO.parse(fasta_file, "fasta"):
@@ -594,7 +642,22 @@ def load_fasta_database(fasta_file):
     return sequences
 
 def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, output_file):
-    """Function to align one target sequence to the query."""
+    """
+    Perform alignment of a target sequence to the query sequence.
+
+    Args:
+        seq_target (str): Target sequence.
+        seq_query (str): Query sequence.
+        k (int): K-mer length.
+        max_distance (int): Maximum allowed distance for double-hits.
+        blosum62 (dict): BLOSUM62 matrix.
+        bit_score_threshold (float): Bit score threshold.
+        len_database (int): Length of the database.
+        output_file (str): Path to save the alignment output.
+    
+    Returns:
+        tuple: Alignments and E-values if any alignments are found.
+    """
     # Extract k-mers
     kmers = extract_kmers(seq_query, k)
     target_index = index_target_sequence(seq_target, k)
@@ -614,7 +677,20 @@ def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_t
     return None
 
 def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output_file):
-    """Run alignment in parallel using multiple processes."""
+    """
+    Run alignments in parallel across multiple threads.
+
+    Args:
+        seq_query (str): Query sequence.
+        database_sequences (list): List of database sequences.
+        k (int): K-mer length.
+        max_distance (int): Maximum distance for double-hits.
+        blosum62 (dict): BLOSUM62 matrix.
+        bit_score_threshold (float): Bit score threshold.
+        num_threads (int): Number of threads for parallel processing.
+        e_value_threshold (float): E-value threshold.
+        output_file (str): Output file to save results.
+    """
     len_database = sum(len(seq) for seq in database_sequences)
     
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
@@ -636,13 +712,13 @@ def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blos
 
 def load_query_sequence(fasta_file):
     """
-    Load a query sequence from a FASTA file.
+    Load the query sequence from a FASTA file.
 
     Args:
-        fasta_file (str): Path to the FASTA file containing the query sequence.
-
+        fasta_file (str): Path to the FASTA file.
+    
     Returns:
-        str: The query nucleotide sequence.
+        str: The query sequence.
     """
     # Lire le fichier FASTA et renvoyer la première séquence
     record = next(SeqIO.parse(fasta_file, "fasta"))
@@ -650,14 +726,14 @@ def load_query_sequence(fasta_file):
 
 def run_blastx(query_fasta, protein_db, output_file, e_value_threshold=0.001, outfmt=6):
     """
-    Run BLASTX using a nucleotide query against a protein database.
+    Run BLASTX using the query sequence against a protein database.
 
     Args:
-        query_fasta (str): Path to the nucleotide query FASTA file.
-        protein_db (str): Path to the protein database for BLASTX.
+        query_fasta (str): Path to the query FASTA file.
+        protein_db (str): Path to the protein database.
         output_file (str): Path to save BLASTX results.
         e_value_threshold (float): E-value threshold for filtering results.
-        outfmt (int): Output format for BLAST results (default is 6, tabular).
+        outfmt (int): Output format.
     """
     # Create BLASTX command
     blastx_cline = NcbiblastxCommandline(query=query_fasta, db=protein_db, evalue=e_value_threshold, outfmt=outfmt, out=output_file)
@@ -666,14 +742,14 @@ def run_blastx(query_fasta, protein_db, output_file, e_value_threshold=0.001, ou
 
 def run_blastn(query_fasta, nucleotide_db, output_file, e_value_threshold=0.001, outfmt=6):
     """
-    Run BLASTN using a nucleotide query against a nucleotide database.
+    Run BLASTN using the query sequence against a nucleotide database.
 
     Args:
-        query_fasta (str): Path to the nucleotide query FASTA file.
-        nucleotide_db (str): Path to the nucleotide database for BLASTN.
+        query_fasta (str): Path to the query FASTA file.
+        nucleotide_db (str): Path to the nucleotide database.
         output_file (str): Path to save BLASTN results.
         e_value_threshold (float): E-value threshold for filtering results.
-        outfmt (int): Output format for BLAST results (default is 6, tabular).
+        outfmt (int): Output format.
     """
     # Create BLASTN command
     blastn_cline = NcbiblastnCommandline(query=query_fasta, db=nucleotide_db, evalue=e_value_threshold, outfmt=outfmt, out=output_file)
@@ -685,7 +761,7 @@ def parse_blast_results(blast_xml_file):
     Parse BLAST XML results and print alignments.
 
     Args:
-        blast_xml_file (str): Path to BLAST XML results file.
+        blast_xml_file (str): Path to BLAST XML file.
     """
     with open(blast_xml_file) as result_handle:
         blast_records = NCBIXML.parse(result_handle)
@@ -700,8 +776,8 @@ def parse_blast_results(blast_xml_file):
                     print(hsp.match[0:75] + "...")
                     print(hsp.sbjct[0:75] + "...\n")
 
-# Example usage with FASTA database
 
+# Example usage with FASTA database
 if __name__ == "__main__":
     # Récupérer les arguments de ligne de commande
     (method, query, database, output, e_value_threshold, outfmt, k, max_distance, bit_score_threshold, num_threads) = parse_arguments()
@@ -719,7 +795,12 @@ if __name__ == "__main__":
 
         # Exécution de l'algorithme personnalisé BLASTP en parallèle
         run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output)
-        sort_output_file(output)
+        
+        # Vérifier si le fichier de sortie a été généré
+        if os.path.exists(output):
+            sort_output_file(output)
+        else:
+            print(f"No alignments found. Output file '{output}' not created.")
 
     elif method == "blastx":
         # Exécution de BLASTX avec Biopython
