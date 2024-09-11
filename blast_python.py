@@ -78,11 +78,12 @@ def parse_arguments():
         - num_threads : int : Number of threads for parallel execution
     """
     try:
+        # Extracting command-line options and arguments
         opts, args = getopt.getopt(sys.argv[1:], "m:q:d:o:e:f:k:w:b:t:", 
                                    ["method=", "query=", "database=", "output=", "e_value_threshold=", "outfmt=", 
                                     "k=", "max_distance=", "bit_score_threshold=", "threads="])
         
-        # Initialisation des valeurs par défaut
+        # Initializing default values for all parameters
         method = query = database = output = None
         e_value_threshold = 0.001
         outfmt = 6
@@ -91,28 +92,30 @@ def parse_arguments():
         bit_score_threshold = 22
         num_threads = 4
 
+        # Parsing the provided arguments and updating the corresponding variables
         for opt, arg in opts:
             if opt in ("-m", "--method"):
-                method = arg
+                method = arg  # BLAST method to use (blastp, blastn, or blastx)
             elif opt in ("-q", "--query"):
-                query = arg
+                query = arg  # Path to query sequence file
             elif opt in ("-d", "--database"):
-                database = arg
+                database = arg  # Path to the database file
             elif opt in ("-o", "--output"):
-                output = arg
+                output = arg  # Path to the output file
             elif opt in ("-e", "--e_value_threshold"):
-                e_value_threshold = float(arg)
+                e_value_threshold = float(arg)  # E-value threshold for filtering results
             elif opt in ("-f", "--outfmt"):
-                outfmt = int(arg)
+                outfmt = int(arg)  # Output format (default: 6)
             elif opt in ("-k", "--k"):
-                k = int(arg)
+                k = int(arg)  # K-mer length for custom BLASTP algorithm
             elif opt in ("-w", "--max_distance"):
-                max_distance = int(arg)
+                max_distance = int(arg)  # Maximum distance for double-hit detection
             elif opt in ("-b", "--bit_score_threshold"):
-                bit_score_threshold = float(arg)
+                bit_score_threshold = float(arg)  # Bit score threshold for filtering alignments
             elif opt in ("-t", "--threads"):
-                num_threads = int(arg)
+                num_threads = int(arg)  # Number of threads for parallel execution
 
+        # Checking if essential arguments are missing
         if not method or not query or not database or not output:
             print("Missing required arguments. Please specify method, query, database, and output.")
             sys.exit(1)
@@ -120,6 +123,7 @@ def parse_arguments():
         return (method, query, database, output, e_value_threshold, outfmt, k, max_distance, bit_score_threshold, num_threads)
 
     except getopt.GetoptError as err:
+        # Handling any errors during argument parsing and printing the error message
         print(f"Error parsing arguments: {err}")
         sys.exit(1)
 
@@ -137,14 +141,17 @@ def get_blosum62_score(a, b, blosum_matrix):
     Returns:
         int: The BLOSUM62 score of the amino acid pair.
     """
+    # Check if the exact pair (a, b) exists in the matrix
     if (a, b) in blosum_matrix:
         return blosum_matrix[(a, b)]
+    # If the reverse pair (b, a) exists (since the matrix is symmetric), return its score
     elif (b, a) in blosum_matrix:
         return blosum_matrix[(b, a)]
+    # If neither pair exists, return the default penalty for a mismatch or unknown substitution
     else:
         return -4  # default penalty for mismatch/gap
 
-# K-mer extraction
+# Function to extract k-mers from a sequence
 def extract_kmers(sequence, k):
     """
     Extract k-mers from a sequence.
@@ -156,13 +163,15 @@ def extract_kmers(sequence, k):
     Returns:
         list: A list of tuples containing k-mers and their positions.
     """
-    kmers = []
-    for i in range(len(sequence) - k + 1):
-        kmer = sequence[i:i+k]
-        kmers.append((kmer, i))  # Preserve the original index
-    return kmers
+    kmers = []  # Initialize an empty list to store the k-mers and their positions
 
-# Indexing the target sequence for fast k-mer search
+    # Loop through the sequence to extract k-mers of length 'k'
+    for i in range(len(sequence) - k + 1):
+        kmer = sequence[i:i+k]  # Extract the k-mer from position i
+        kmers.append((kmer, i))  # Store the k-mer along with its starting index
+    return kmers  # Return the list of k-mers and their positions
+
+# Function to index k-mers in a target sequence for fast searching
 def index_target_sequence(sequence, k):
     """
     Find positions of k-mers in the target sequence using an index.
@@ -174,15 +183,16 @@ def index_target_sequence(sequence, k):
     Returns:
         dict: Dictionary of k-mer positions in both query and target sequences.
     """
-    kmer_index = {}
+    kmer_index = {}  # Initialize an empty dictionary to store k-mers and their positions
+    # Iterate through the target sequence to extract and index k-mers of length 'k'
     for i in range(len(sequence) - k + 1):
-        kmer = sequence[i:i+k]
+        kmer = sequence[i:i+k]  # Extract the k-mer starting at position i
         if kmer not in kmer_index:
-            kmer_index[kmer] = []
-        kmer_index[kmer].append(i)  # Preserve the original index
-    return kmer_index
+            kmer_index[kmer] = []  # Create a new entry for the k-mer if it doesn't exist
+        kmer_index[kmer].append(i)  # Append the position to the list of positions for this k-mer
+    return kmer_index  # Return the dictionary containing k-mers and their positions
 
-# Find k-mer positions in the target sequence
+# Function to find positions of k-mers in the query and target sequences
 def find_kmer_positions(kmers, target_index):
     """
     Finds the positions of the extracted k-mers in an indexed target sequence.
@@ -194,16 +204,20 @@ def find_kmer_positions(kmers, target_index):
     Returns:
         dict: Dictionary of k-mers and their respective positions in the query and target sequences.
     """
-    positions = {}
+    positions = {}  # Initialize a dictionary to store matching k-mer positions
+    # Iterate through each k-mer from the query along with its position
     for kmer, query_pos in kmers:
+        # Check if the k-mer exists in the target sequence index
         if kmer in target_index:
+            # For each matching k-mer in the target, store its position in both query and target
             for target_pos in target_index[kmer]:
                 if kmer not in positions:
-                    positions[kmer] = []
-                positions[kmer].append((target_pos, query_pos))  # position in target and in query
-    return positions
+                    positions[kmer] = []  # Initialize a list for new k-mers
+                positions[kmer].append((target_pos, query_pos))  # Store target and query positions
+    return positions  # Return the dictionary of matching positions
 
-# Function to find double-hits on the same diagonal and without strict overlap
+# Function to detect double hits in the sequence comparison
+# Double hits are pairs of k-mers that align on the same diagonal without overlap
 def find_double_hits(kmer_positions, max_distance):
     """
     Identify double-hits between the query and target sequences.
@@ -215,26 +229,28 @@ def find_double_hits(kmer_positions, max_distance):
     Returns:
         list: A list of double-hit positions.
     """
-    double_hits = []
-    kmer_list = list(kmer_positions.items())
+    double_hits = []  # Initialize a list to store double hits
+    kmer_list = list(kmer_positions.items())  # Convert the dictionary to a list for indexed access
     
+    # Loop over all k-mers in the query and target sequences
     for i in range(len(kmer_list)):
-        kmer1, positions1 = kmer_list[i]
+        kmer1, positions1 = kmer_list[i]  # Get the first k-mer and its positions
+        # Compare with other k-mers in the list
         for pos1, query_pos1 in positions1:
             for j in range(i + 1, len(kmer_list)):
-                kmer2, positions2 = kmer_list[j]
+                kmer2, positions2 = kmer_list[j]  # Get the second k-mer and its positions
                 for pos2, query_pos2 in positions2:
-                    # Check diagonal
+                    # Check if the k-mers are on the same diagonal
                     if (pos1 - query_pos1) == (pos2 - query_pos2):
-                        # Check for strict non-overlap and distance
+                        # Ensure the two hits are close enough but not overlapping
                         if abs(pos2 - pos1) <= max_distance:
-                            # Avoid hits that are exactly in the same location
+                            # Ensure they are not in exactly the same location (strict non-overlap)
                             if pos1 != pos2 or query_pos1 != query_pos2:
-                                # Double hit detected
+                                # Double hit found, append details
                                 double_hits.append((kmer1, pos1, query_pos1, kmer2, pos2, query_pos2))
-    return double_hits
+    return double_hits  # Return the list of detected double hits
 
-# Function to evaluate the initial score of a double-hit
+# Function to calculate the score of a double-hit between two k-mers
 def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
     """
     Calculate the score of a double-hit using the BLOSUM62 matrix.
@@ -247,10 +263,12 @@ def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
     Returns:
         int: The score of the double-hit.
     """
-    score = 0
+    score = 0  # Initialize the score to zero
+    # Iterate over the amino acids of the two k-mers (assuming both are of the same length)
     for a, b in zip(kmer1, kmer2):
+        # Add the BLOSUM62 score for the amino acid pair (a, b)
         score += get_blosum62_score(a, b, blosum_matrix)
-    return score
+    return score  # Return the total score for the double-hit
 
 # Extend a double-hit with gapped alignment
 def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
@@ -271,59 +289,59 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
     Returns:
         tuple: Alignment score and the final alignment.
     """
-    m, n = len(seq_query), len(seq_target)
+    m, n = len(seq_query), len(seq_target)  # Lengths of the query and target sequences
     
-    # Initialize current and previous score rows
-    previous_row = np.zeros(n + 1)
-    current_row = np.zeros(n + 1)
-    traceback_matrix = np.zeros((m + 1, n + 1), dtype=int)  # Still need full traceback matrix for recovery
+    # Initialize the dynamic programming score matrix (Smith-Waterman) and traceback matrix
+    previous_row = np.zeros(n + 1)  # Previous row in the dynamic programming matrix
+    current_row = np.zeros(n + 1)   # Current row in the dynamic programming matrix
+    traceback_matrix = np.zeros((m + 1, n + 1), dtype=int)  # Traceback matrix for tracking alignment path
     
-    # Initialize best score tracking
+    # Variables to track the best score and its position
     max_score = 0
-    max_pos = (0, 0)
+    max_pos = (0, 0)  # Position of the maximum score in the alignment matrix
 
+    # Iterate through each position in the query (i) and target (j) sequences
     for i in range(1, m + 1):
         for j in range(1, n + 1):
-            # Ensure valid BLOSUM62 score calculation
+            # Calculate match score using the BLOSUM62 matrix for amino acid substitution
             try:
                 match = previous_row[j - 1] + get_blosum62_score(seq_query[i - 1], seq_target[j - 1], blosum_matrix)
             except KeyError:
-                match = -4  # Default mismatch penalty for unknown pairs
+                match = -4  # Default mismatch penalty for unknown amino acid pairs
 
-            # Handle gap penalties (gap in query or gap in target)
+            # Calculate gap penalties (left: gap in query, up: gap in target)
             gap_query = current_row[j - 1] + (gap_extension_penalty if traceback_matrix[i][j - 1] == 2 else gap_open_penalty)
             gap_target = previous_row[j] + (gap_extension_penalty if traceback_matrix[i - 1][j] == 1 else gap_open_penalty)
 
-            # Calculate best score for the current cell
+            # Choose the best score for the current cell (0 for local alignment termination, match, or gap)
             current_score = max(0, match, gap_query, gap_target)
+            current_row[j] = current_score  # Update the current row with the computed score
 
-            current_row[j] = current_score
-
-            # Update traceback matrix
+            # Update the traceback matrix based on the direction of the best score
             if current_score == match:
-                traceback_matrix[i][j] = 0  # Diagonal (match/mismatch)
+                traceback_matrix[i][j] = 0  # Diagonal move (match/mismatch)
             elif current_score == gap_query:
-                traceback_matrix[i][j] = 2  # Left (gap in query)
+                traceback_matrix[i][j] = 2  # Left move (gap in query)
             elif current_score == gap_target:
-                traceback_matrix[i][j] = 1  # Up (gap in target)
+                traceback_matrix[i][j] = 1  # Up move (gap in target)
 
-            # Track max score
+            # Track the highest score and its position in the matrix
             if current_score > max_score:
                 max_score = current_score
                 max_pos = (i, j)
 
-            # Check if current score has dropped more than X_g below max_score
+            # Stop the extension if the current score has dropped too much from the maximum score (controlled by X_g)
             if max_score - current_score > X_g:
-                break  # Stop the extension if score drops too much
+                break
 
-        # Swap rows: move current_row to previous_row, and reset current_row
-        previous_row, current_row = current_row, np.zeros(n + 1)
+        # Swap rows for the next iteration (use current_row for the next previous_row)
+        previous_row, current_row = current_row, np.zeros(n + 1)  # Reset the current row for the next iteration
 
-    # Traceback to recover the alignment (this part doesn't use the score matrix directly)
+    # Perform traceback to recover the full alignment
     aligned_query, aligned_target = [], []
-    i, j = max_pos
+    i, j = max_pos  # Start traceback from the position of the maximum score
 
-    while i > 0 and j > 0 and traceback_matrix[i][j] != -1:  # Ensure valid bounds and traceback
+    while i > 0 and j > 0 and traceback_matrix[i][j] != -1:  # Continue until reaching the edge of the matrix
         if traceback_matrix[i][j] == 0:
             aligned_query.append(seq_query[i - 1])
             aligned_target.append(seq_target[j - 1])
@@ -331,20 +349,21 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
             j -= 1
         elif traceback_matrix[i][j] == 1:
             aligned_query.append(seq_query[i - 1])
-            aligned_target.append('-')
+            aligned_target.append('-')  # Gap in the target sequence
             i -= 1
         elif traceback_matrix[i][j] == 2:
-            aligned_query.append('-')
+            aligned_query.append('-')  # Gap in the query sequence
             aligned_target.append(seq_target[j - 1])
             j -= 1
 
+    # Reverse the aligned sequences to return them in the correct order
     aligned_query = aligned_query[::-1]
     aligned_target = aligned_target[::-1]
-    final_alignment = list(zip(aligned_query, aligned_target))
+    final_alignment = list(zip(aligned_query, aligned_target))  # Combine query and target alignments into pairs
 
-    return max_score, final_alignment
+    return max_score, final_alignment  # Return the maximum score and the final alignment
 
-# Filter alignments by score with distance selection
+# Filter and extend alignments based on double-hits
 def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, bit_score_threshold):
     """
     Filter and extend alignments based on double-hits.
@@ -360,35 +379,43 @@ def filter_alignments(double_hits, seq_query, seq_target, blosum_matrix, bit_sco
         list: List of filtered alignments.
     """
     alignments = []
-    
-    # Si aucun double-hit n'est détecté, on retourne une liste vide
+
+    # Return an empty list if no double-hits were detected
     if not double_hits:
         return alignments
 
-    # On trouve le double-hit avec la plus grande distance
+    # Initialize variables to track the best double-hit with the largest distance between k-mers
     best_hit = None
     max_distance = 0
 
+    # Iterate over all detected double-hits to find the one with the largest distance between k-mers
     for hit in double_hits:
         kmer1, pos1, query_pos1, kmer2, pos2, query_pos2 = hit
-        distance = abs(pos2 - pos1)
-        
+        distance = abs(pos2 - pos1)  # Calculate the distance between the two k-mers in the target sequence
+
+        # Update the best_hit if this double-hit has a greater distance
         if distance > max_distance:
             max_distance = distance
             best_hit = hit
 
-    # Si on a trouvé un meilleur double-hit
+    # If a best double-hit is found, extend the alignment
     if best_hit:
-        # On étend l'alignement à partir de ce double-hit
+        # Extract positions and k-mers from the best double-hit
         kmer1, pos1, query_pos1, kmer2, pos2, query_pos2 = best_hit
+
+        # Extend the alignment starting from the double-hit using Smith-Waterman
         score, alignment = extend_alignment(seq_query, seq_target, query_pos1, pos1, blosum_matrix, gap_open_penalty=-11, gap_extension_penalty=-2)
+
+        # Calculate the bit score of the extended alignment
         bit_score = calculate_bit_score(score)
-        
+
+        # Only keep the alignment if the bit score meets or exceeds the specified threshold
         if bit_score >= bit_score_threshold:
             alignments.append((score, alignment))
 
     return alignments
 
+#Function to filter duplicate alignments
 def filter_duplicate_alignments(alignments):
     """
     Remove duplicate alignments based on positions.
@@ -399,20 +426,22 @@ def filter_duplicate_alignments(alignments):
     Returns:
         list: Unique alignments with duplicates removed.
     """
-    unique_alignments = []
-    seen_positions = set()
+    unique_alignments = []  # Store unique alignments
+    seen_positions = set()  # Set to track alignment positions already encountered
 
+    # Iterate through the list of alignments
     for score, alignment in alignments:
-        # Create a unique key based on the alignment positions
+        # Create a hashable key from the alignment based on the positions
         alignment_key = tuple(alignment)
-        
+
+        # Only add alignment if its position pattern has not been seen before
         if alignment_key not in seen_positions:
-            unique_alignments.append((score, alignment))
-            seen_positions.add(alignment_key)
+            unique_alignments.append((score, alignment))  # Append unique alignment
+            seen_positions.add(alignment_key)  # Mark position as seen
 
     return unique_alignments
 
-# Fonction pour calculer le bit score
+# Function to calculate the bit score from the raw alignment score
 def calculate_bit_score(raw_score, lambda_param=0.318, K=0.134):
     """
     Calculate the bit score from a raw score.
@@ -425,9 +454,10 @@ def calculate_bit_score(raw_score, lambda_param=0.318, K=0.134):
     Returns:
         float: The calculated bit score.
     """
+    # Convert the raw score into a normalized bit score using the formula
     return (lambda_param * raw_score - math.log(K)) / math.log(2)
 
-# Calculate E-value from score
+# Function to calculate the E-value from a bit score
 def calculate_e_value_from_bitscore(bit_score, m, n):
     """
     Calculate the E-value from a bit score.
@@ -440,6 +470,7 @@ def calculate_e_value_from_bitscore(bit_score, m, n):
     Returns:
         float: The calculated E-value.
     """
+    # Calculate the E-value using the standard formula: E = m * n * 2^(-bit_score)
     return m * n * math.pow(2, -bit_score)
 
 # Calculate E-values for all alignments
@@ -455,16 +486,17 @@ def calculate_e_values(alignments, seq_query, len_database):
     Returns:
         list: List of tuples containing E-values, scores, and alignments.
     """
-    e_values = []
-    m = len(seq_query)
-    n = len_database
+    e_values = []  # Store the resulting E-values for all alignments
+    m = len(seq_query)  # Length of the query sequence
+    n = len_database  # Total length of the database
 
+    # Loop through each alignment and its corresponding raw score
     for raw_score, alignment in alignments:
-        bit_score = calculate_bit_score(raw_score)  # Calcul du bit score
-        e_value = calculate_e_value_from_bitscore(bit_score, m, n)  # Calcul de l'E-value à partir du bit score
-        e_values.append((e_value, raw_score, alignment))
-    
-    return e_values
+        bit_score = calculate_bit_score(raw_score)  # Calculate the bit score
+        e_value = calculate_e_value_from_bitscore(bit_score, m, n)  # Compute E-value using the bit score
+        e_values.append((e_value, raw_score, alignment))  # Append the result as a tuple
+
+    return e_values  # Return the list of E-values, scores, and alignments
 
 # Filter alignments by E-value
 def filter_by_e_value(e_values, e_value_threshold):
@@ -478,8 +510,10 @@ def filter_by_e_value(e_values, e_value_threshold):
     Returns:
         list: Filtered alignments with E-value below the threshold.
     """
+    # Use list comprehension to filter alignments based on E-value threshold
     filtered_alignments = [align for align in e_values if align[0] <= e_value_threshold]
-    return filtered_alignments
+    
+    return filtered_alignments  # Return only alignments with significant E-values
 
 # Function to format the alignment for BLAST-like display
 def format_alignment(seq_query, seq_target, alignment):
@@ -494,26 +528,32 @@ def format_alignment(seq_query, seq_target, alignment):
     Returns:
         tuple: Formatted query, match line, and target sequence strings.
     """
+    # Lists to store the formatted query sequence, match line, and target sequence
     query_aligned = []
     target_aligned = []
     match_line = []
 
+    # Iterate over the aligned residues in the query and target sequences
     for q_res, t_res in alignment:
+        # Append the query residue or gap
         query_aligned.append(q_res if q_res != '-' else '-')
+        # Append the target residue or gap
         target_aligned.append(t_res if t_res != '-' else '-')
 
+        # Determine the type of match and add the appropriate symbol
         if q_res == t_res:
-            match_line.append('|')  # perfect match
+            match_line.append('|')  # Perfect match between query and target
         elif get_blosum62_score(q_res, t_res, MatrixInfo.blosum62) > 0:
-            match_line.append(':')  # reasonable match
+            match_line.append(':')  # Reasonable substitution based on BLOSUM62 score
         else:
-            match_line.append('.')  # mismatch or weak match
+            match_line.append('.')  # Mismatch or weak substitution
 
+    # Convert the aligned sequences and match line to strings
     query_str = "".join(query_aligned)
     match_str = "".join(match_line)
     target_str = "".join(target_aligned)
 
-    return query_str, match_str, target_str
+    return query_str, match_str, target_str  # Return the formatted alignment
 
 # Display formatted alignment results
 def display_blast_like_results(alignments, e_values, seq_query, seq_target, output_file):
@@ -578,26 +618,27 @@ def sort_output_file(output_file):
     Args:
         output_file (str): The file to be sorted.
     """
+    # Open and read the output file
     with open(output_file, "r") as f:
         lines = f.readlines()
 
-    # Placeholder for storing the alignments
+    # Placeholder for storing the alignment blocks
     alignments = []
     current_alignment = []
 
-    # Parse the file and collect alignments
+    # Parse the file line by line and collect alignments
     for line in lines:
-        if line.startswith("Alignment"):  # New alignment block
-            if current_alignment:  # If there's an existing alignment, save it
+        if line.startswith("Alignment"):  # New alignment block found
+            if current_alignment:  # If an alignment is already being processed, save it
                 alignments.append(current_alignment)
-            current_alignment = [line]  # Start a new alignment
+            current_alignment = [line]  # Start a new alignment block
         else:
-            current_alignment.append(line)  # Append lines to the current alignment
+            current_alignment.append(line)  # Continue collecting lines for the current alignment
     
-    if current_alignment:  # Don't forget the last alignment
+    if current_alignment:  # Ensure the last alignment is added
         alignments.append(current_alignment)
 
-    # Sort alignments by the E-value, ensuring that we only sort those that have an "Expect =" line
+    # Define a helper function to extract E-value from an alignment block
     def extract_evalue(alignment):
         """
         Extracts the E-value from an alignment block.
@@ -611,21 +652,22 @@ def sort_output_file(output_file):
         for line in alignment:
             if "Expect" in line:
                 try:
+                    # Extract the E-value by splitting the line and converting to float
                     evalue_str = line.split('=')[-1].strip()
-                    return float(evalue_str.replace("e", "E"))
+                    return float(evalue_str.replace("e", "E"))  # Convert scientific notation
                 except ValueError:
-                    return float('inf')  # If we can't parse, assume a very high E-value
-        return float('inf')  # If no E-value found, assume a very high E-value
+                    return float('inf')  # Return infinity if the E-value cannot be parsed
+        return float('inf')  # Return infinity if no E-value is found
 
-    # Sort alignments by the extracted E-value (from smallest to largest E-value)
+    # Sort the alignment blocks by their extracted E-values (smallest first)
     alignments.sort(key=extract_evalue)
 
-    # Rewrite the sorted alignments back to the file
+    # Write the sorted alignments back to the file
     with open(output_file, "w") as f:
         for alignment in alignments:
-            f.writelines(alignment)
+            f.writelines(alignment)  # Write each sorted alignment block
 
-# Function to load FASTA database
+# Function to load sequences from a FASTA database
 def load_fasta_database(fasta_file):
     """
     Load sequences from a FASTA file to use as a database.
@@ -636,11 +678,13 @@ def load_fasta_database(fasta_file):
     Returns:
         list: List of sequences from the file.
     """
-    sequences = []
+    sequences = []  # Initialize an empty list to store sequences
+    # Parse the FASTA file using SeqIO and extract each sequence
     for record in SeqIO.parse(fasta_file, "fasta"):
-        sequences.append(str(record.seq))
-    return sequences
+        sequences.append(str(record.seq))  # Convert the sequence to a string and append to the list
+    return sequences  # Return the list of sequences
 
+# Function to align a target sequence to the query sequence
 def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, output_file):
     """
     Perform alignment of a target sequence to the query sequence.
@@ -658,24 +702,36 @@ def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_t
     Returns:
         tuple: Alignments and E-values if any alignments are found.
     """
-    # Extract k-mers
+    # Step 1: Extract k-mers from the query sequence
     kmers = extract_kmers(seq_query, k)
+
+    # Step 2: Index the target sequence by k-mers
     target_index = index_target_sequence(seq_target, k)
+
+    # Step 3: Find positions of matching k-mers between query and target
     kmer_positions = find_kmer_positions(kmers, target_index)
+
+    # Step 4: Detect double-hits (pairs of matching k-mers on the same diagonal)
     double_hits = find_double_hits(kmer_positions, max_distance)
-    
-    # Filter and align
+
+    # Step 5: Filter and extend alignments based on detected double-hits
     alignments = filter_alignments(double_hits, seq_query, seq_target, blosum62, bit_score_threshold)
+
+    # Step 6: Remove any duplicate alignments
     alignments = filter_duplicate_alignments(alignments)
+
+    # Step 7: Calculate E-values for the alignments
     e_values = calculate_e_values(alignments, seq_query, len_database)
-    
-    # Filter based on E-value
+
+    # Step 8: Filter the alignments based on the E-value threshold
     significant_alignments = filter_by_e_value(e_values, e_value_threshold)
-    
+
+    # Return the significant alignments and E-values if found, otherwise return None
     if significant_alignments:
         return alignments, e_values
     return None
 
+# Function to run alignments in parallel using multiple threads
 def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output_file):
     """
     Run alignments in parallel across multiple threads.
@@ -691,23 +747,32 @@ def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blos
         e_value_threshold (float): E-value threshold.
         output_file (str): Output file to save results.
     """
+    # Step 1: Calculate the total length of the database (sum of all target sequence lengths)
     len_database = sum(len(seq) for seq in database_sequences)
-    
+
+    # Step 2: Initialize a process pool for parallel execution, limiting to the number of threads specified
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
-        # Submit tasks for parallel processing
+
+        # Step 3: Submit alignment tasks to the pool
+        # Each target sequence is aligned to the query in parallel
         future_to_sequence = {
             executor.submit(align_sequence, seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, e_value_threshold): seq_target
             for seq_target in database_sequences
         }
 
+        # Step 4: Process the results as they complete
         for future in concurrent.futures.as_completed(future_to_sequence):
             seq_target = future_to_sequence[future]
             try:
+                # Retrieve the result from the completed task
                 result = future.result()
+
+                # If valid alignments are found, display and save the results
                 if result:
                     alignments, e_values = result
                     display_blast_like_results(alignments, e_values, seq_query, seq_target, output_file)
             except Exception as exc:
+                # If an exception occurs during alignment, log the error
                 print(f"Generated an exception for {seq_target}: {exc}")
 
 def load_query_sequence(fasta_file):
@@ -720,8 +785,10 @@ def load_query_sequence(fasta_file):
     Returns:
         str: The query sequence.
     """
-    # Lire le fichier FASTA et renvoyer la première séquence
+    # Parse the FASTA file and retrieve the first sequence entry
     record = next(SeqIO.parse(fasta_file, "fasta"))
+    
+    # Convert the sequence into a string and return it
     return str(record.seq)
 
 def run_blastx(query_fasta, protein_db, output_file, e_value_threshold=0.001, outfmt=6):
@@ -735,9 +802,13 @@ def run_blastx(query_fasta, protein_db, output_file, e_value_threshold=0.001, ou
         e_value_threshold (float): E-value threshold for filtering results.
         outfmt (int): Output format.
     """
-    # Create BLASTX command
+    # Create BLASTX command with the specified parameters for query, database, E-value, output format, and file
     blastx_cline = NcbiblastxCommandline(query=query_fasta, db=protein_db, evalue=e_value_threshold, outfmt=outfmt, out=output_file)
+    
+    # Display the command being run (useful for debugging or tracking the exact command executed)
     print(f"Running BLASTX command: {blastx_cline}")
+    
+    # Execute the BLASTX command and capture any standard output or errors
     stdout, stderr = blastx_cline()
 
 def run_blastn(query_fasta, nucleotide_db, output_file, e_value_threshold=0.001, outfmt=6):
@@ -751,9 +822,13 @@ def run_blastn(query_fasta, nucleotide_db, output_file, e_value_threshold=0.001,
         e_value_threshold (float): E-value threshold for filtering results.
         outfmt (int): Output format.
     """
-    # Create BLASTN command
+    # Create BLASTN command with specified parameters: query file, database, E-value threshold, output format, and output file
     blastn_cline = NcbiblastnCommandline(query=query_fasta, db=nucleotide_db, evalue=e_value_threshold, outfmt=outfmt, out=output_file)
+    
+    # Print the constructed BLASTN command to confirm what is being executed (useful for debugging and transparency)
     print(f"Running BLASTN command: {blastn_cline}")
+    
+    # Execute the BLASTN command and capture any standard output or errors generated during the process
     stdout, stderr = blastn_cline()
 
 def parse_blast_results(blast_xml_file):
@@ -763,56 +838,72 @@ def parse_blast_results(blast_xml_file):
     Args:
         blast_xml_file (str): Path to BLAST XML file.
     """
+    # Open the XML file containing the BLAST results for reading
     with open(blast_xml_file) as result_handle:
+        
+        # Parse the BLAST results from the XML format using Biopython's NCBIXML parser
         blast_records = NCBIXML.parse(result_handle)
+        
+        # Iterate over each BLAST record in the results
         for blast_record in blast_records:
+            
+            # Iterate through each alignment in the current BLAST record
             for alignment in blast_record.alignments:
+                
+                # Iterate through the high-scoring pairs (HSPs) in each alignment
                 for hsp in alignment.hsps:
+                    
+                    # Print key information about the alignment
                     print(f"****Alignment****")
-                    print(f"sequence: {alignment.title}")
-                    print(f"length: {alignment.length}")
-                    print(f"e-value: {hsp.expect}")
+                    print(f"sequence: {alignment.title}")  # Title of the sequence aligned
+                    print(f"length: {alignment.length}")   # Length of the aligned sequence
+                    print(f"e-value: {hsp.expect}")       # E-value of the HSP (lower is better)
+                    
+                    # Print the first 75 characters of the query, match, and subject sequences for clarity
                     print(hsp.query[0:75] + "...")
                     print(hsp.match[0:75] + "...")
                     print(hsp.sbjct[0:75] + "...\n")
 
-
-# Example usage with FASTA database
 if __name__ == "__main__":
-    # Récupérer les arguments de ligne de commande
+    # Parse command-line arguments for method, input/output files, and parameters
     (method, query, database, output, e_value_threshold, outfmt, k, max_distance, bit_score_threshold, num_threads) = parse_arguments()
 
-    # Chronométrage de l'exécution
+    # Start timer to measure execution time
     start = time.time()
 
+    # Check which BLAST method is chosen and execute accordingly
     if method == "blastp":
-        # Charger la séquence de requête et de la base de données
+        # Load the query sequence from the specified FASTA file
         seq_query = load_query_sequence(query)
+        
+        # Load the target database sequences from the FASTA file
         database_sequences = load_fasta_database(database)
         
-        # Charger la matrice BLOSUM62
+        # Load the BLOSUM62 matrix for scoring alignments
         blosum62 = MatrixInfo.blosum62
 
-        # Exécution de l'algorithme personnalisé BLASTP en parallèle
+        # Run the custom BLASTP algorithm in parallel across multiple threads
         run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output)
         
-        # Vérifier si le fichier de sortie a été généré
+        # Check if the output file was created (i.e., if alignments were found)
         if os.path.exists(output):
+            # Sort the output alignments by E-value
             sort_output_file(output)
         else:
             print(f"No alignments found. Output file '{output}' not created.")
 
     elif method == "blastx":
-        # Exécution de BLASTX avec Biopython
+        # Execute BLASTX using Biopython's BLAST+ command line interface
         run_blastx(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
 
     elif method == "blastn":
-        # Exécution de BLASTN avec Biopython
+        # Execute BLASTN using Biopython's BLAST+ command line interface
         run_blastn(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
 
     else:
+        # Handle invalid method option and provide feedback to the user
         print(f"Unknown method: {method}. Please choose from 'blastp', 'blastx', or 'blastn'.")
 
-    # Fin du chronomètre
+    # End the timer and display the total execution time
     end = time.time()
     print(f"Execution time for {method} = {end - start} seconds")
