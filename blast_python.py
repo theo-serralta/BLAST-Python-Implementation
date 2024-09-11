@@ -45,9 +45,12 @@ import os
 import math
 import sys
 import time
+import tkinter as tk
+from tkinter import filedialog, simpledialog, ttk
 import getopt
 import concurrent.futures
 import numpy as np
+import threading
 from Bio import SeqIO
 from Bio.SubsMat import MatrixInfo
 from Bio.Seq import Seq
@@ -475,7 +478,7 @@ def filter_duplicate_alignments(alignments):
     return unique_alignments
 
 # Function to calculate the bit score from the raw alignment score
-def calculate_bit_score(raw_score, lambda_param=0.318, K=0.134):
+def calculate_bit_score(raw_score, lambda_param=0.318, k=0.134):
     """
     Calculate the bit score from a raw score.
 
@@ -488,7 +491,7 @@ def calculate_bit_score(raw_score, lambda_param=0.318, K=0.134):
         float: The calculated bit score.
     """
     # Convert the raw score into a normalized bit score using the formula
-    return (lambda_param * raw_score - math.log(K)) / math.log(2)
+    return (lambda_param * raw_score - math.log(k)) / math.log(2)
 
 # Function to calculate the E-value from a bit score
 def calculate_e_value_from_bitscore(bit_score, m, n):
@@ -818,7 +821,7 @@ def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blos
                 print(f"Generated an exception for {seq_target}: {exc}")
 
 # Function to align a target sequence to the query sequence
-def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, output_file):
+def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, e_value_threshold):
     """
     Perform alignment of a target sequence to the query sequence.
 
@@ -865,46 +868,154 @@ def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_t
     return None
 
 
-if __name__ == "__main__":
-    # Parse command-line arguments for method, input/output files, and parameters
-    (method, query, database, output, e_value_threshold, outfmt, k, max_distance, bit_score_threshold, num_threads) = parse_arguments()
+def browse_file(label):
+    """Open a file dialog to select a file."""
+    filename = filedialog.askopenfilename()
+    label.config(text=filename)
+    return filename
 
-    # Start timer to measure execution time
+def ask_db_name_blastx(label):
+    """Ask for the database name for BLASTX."""
+    db_name = simpledialog.askstring("Database Name", "Enter the database name (e.g., 'exemple_db_blastx'):")
+    if db_name:
+        label.config(text=db_name)
+    return db_name
+
+def ask_db_name_blastn(label):
+    """Ask for the database name for BLASTN."""
+    db_name = simpledialog.askstring("Database Name", "Enter the database name (e.g., 'exemple_db_blastn'):")
+    if db_name:
+        label.config(text=db_name)
+    return db_name
+
+def run_blast_thread():
+    """Run BLAST in a separate thread to avoid blocking the UI."""
+    progress_bar['value'] = 0  # Reset progress bar to 0%
+    progress_bar.start(10)  # Start progress bar animation
+    threading.Thread(target=run_blast).start()  # Start BLAST execution in a separate thread
+
+def run_blast():
+    """Run the selected BLAST method."""
+    method = method_var.get()
+    query = query_file_label.cget("text")
+    database = db_file_label.cget("text")
+    output = output_entry.get()
+    e_value_threshold = float(evalue_entry.get())
+    outfmt = int(outfmt_entry.get())
+    k = int(k_entry.get())
+    max_distance = int(max_dist_entry.get())
+    bit_score_threshold = float(bit_score_entry.get())
+    num_threads = int(threads_entry.get())
+
     start = time.time()
 
-    # Check which BLAST method is chosen and execute accordingly
-    if method == "blastp":
-        # Load the query sequence from the specified FASTA file
-        seq_query = load_query_sequence(query)
-        
-        # Load the target database sequences from the FASTA file
-        database_sequences = load_fasta_database(database)
-        
-        # Load the BLOSUM62 matrix for scoring alignments
-        blosum62 = MatrixInfo.blosum62
+    # Simulate running a task by setting progress incrementally
+    time.sleep(2)  # Simulate processing
 
-        # Run the custom BLASTP algorithm in parallel across multiple threads
+    if method == "blastp":
+        seq_query = load_query_sequence(query)
+        database_sequences = load_fasta_database(database)
+        blosum62 = MatrixInfo.blosum62
         run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output)
-        
-        # Check if the output file was created (i.e., if alignments were found)
         if os.path.exists(output):
-            # Sort the output alignments by E-value
             sort_output_file(output)
         else:
             print(f"No alignments found. Output file '{output}' not created.")
-
     elif method == "blastx":
-        # Execute BLASTX using Biopython's BLAST+ command line interface
         run_blastx(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
-
     elif method == "blastn":
-        # Execute BLASTN using Biopython's BLAST+ command line interface
         run_blastn(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
 
-    else:
-        # Handle invalid method option and provide feedback to the user
-        print(f"Unknown method: {method}. Please choose from 'blastp', 'blastx', or 'blastn'.")
-
-    # End the timer and display the total execution time
     end = time.time()
     print(f"Execution time for {method} = {end - start} seconds")
+
+    # Set the progress bar to 100% when done
+    progress_bar.stop()  # Stop the animation
+    progress_bar['value'] = 100  # Fill the progress bar completely
+
+
+# Initialize the GUI window (use only one instance of tk.Tk())
+root = tk.Tk()
+root.title("Custom BLAST GUI")
+
+# Method selection
+tk.Label(root, text="Method:").grid(row=0, column=0)
+method_var = tk.StringVar(value="blastp")
+tk.OptionMenu(root, method_var, "blastp", "blastn", "blastx").grid(row=0, column=1)
+
+# Query file selection
+tk.Label(root, text="Query file:").grid(row=1, column=0)
+query_file_label = tk.Label(root, text="No file selected", width=40)
+query_file_label.grid(row=1, column=1)
+tk.Button(root, text="Browse", command=lambda: browse_file(query_file_label)).grid(row=1, column=2)
+
+# Database selection
+tk.Label(root, text="Database:").grid(row=2, column=0)
+db_file_label = tk.Label(root, text="No database selected", width=40)
+db_file_label.grid(row=2, column=1)
+db_button = tk.Button(root, text="Browse", command=lambda: browse_file(db_file_label))
+db_button.grid(row=2, column=2)
+
+# Function to update database selection UI based on method
+def update_db_selection(*args):
+    method = method_var.get()
+    if method == "blastp":
+        db_button.config(text="Browse", command=lambda: browse_file(db_file_label))
+    elif method == "blastx":
+        db_button.config(text="Enter Name", command=lambda: ask_db_name_blastx(db_file_label))
+    elif method == "blastn":
+        db_button.config(text="Enter Name", command=lambda: ask_db_name_blastn(db_file_label))
+
+# Bind method selection to update the database selection behavior
+method_var.trace_add("write", update_db_selection)
+
+# Output file
+tk.Label(root, text="Output file:").grid(row=3, column=0)
+output_entry = tk.Entry(root, width=40)
+output_entry.grid(row=3, column=1)
+
+# E-value threshold
+tk.Label(root, text="E-value threshold:").grid(row=4, column=0)
+evalue_entry = tk.Entry(root, width=10)
+evalue_entry.grid(row=4, column=1)
+evalue_entry.insert(0, "0.001")
+
+# Output format
+tk.Label(root, text="Output format:").grid(row=5, column=0)
+outfmt_entry = tk.Entry(root, width=10)
+outfmt_entry.grid(row=5, column=1)
+outfmt_entry.insert(0, "6")
+
+# K-mer length
+tk.Label(root, text="K-mer length:").grid(row=6, column=0)
+k_entry = tk.Entry(root, width=10)
+k_entry.grid(row=6, column=1)
+k_entry.insert(0, "3")
+
+# Maximum distance for double-hit detection
+tk.Label(root, text="Max distance:").grid(row=7, column=0)
+max_dist_entry = tk.Entry(root, width=10)
+max_dist_entry.grid(row=7, column=1)
+max_dist_entry.insert(0, "10")
+
+# Bit score threshold
+tk.Label(root, text="Bit score threshold:").grid(row=8, column=0)
+bit_score_entry = tk.Entry(root, width=10)
+bit_score_entry.grid(row=8, column=1)
+bit_score_entry.insert(0, "22")
+
+# Number of threads
+tk.Label(root, text="Number of threads:").grid(row=9, column=0)
+threads_entry = tk.Entry(root, width=10)
+threads_entry.grid(row=9, column=1)
+threads_entry.insert(0, "4")
+
+# Progress bar
+progress_bar = ttk.Progressbar(root, orient="horizontal", length=300, mode="determinate")
+progress_bar.grid(row=10, columnspan=3, pady=10)
+
+# Run button
+tk.Button(root, text="Run BLAST", command=run_blast_thread).grid(row=11, column=1)
+
+# Start the GUI event loop
+root.mainloop()
