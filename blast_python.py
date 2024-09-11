@@ -889,13 +889,26 @@ def ask_db_name_blastn(label):
     return db_name
 
 def run_blast_thread():
-    """Run BLAST in a separate thread to avoid blocking the UI."""
+    """
+    Launch BLAST execution in a separate thread to keep the UI responsive.
+
+    This function resets the progress bar to 0%, starts its animation, and 
+    spawns a new thread to run the `run_blast()` function, ensuring that the
+    UI remains responsive during the BLAST execution.
+    """
     progress_bar['value'] = 0  # Reset progress bar to 0%
     progress_bar.start(10)  # Start progress bar animation
     threading.Thread(target=run_blast).start()  # Start BLAST execution in a separate thread
 
 def run_blast():
-    """Run the selected BLAST method."""
+    """
+    Execute the selected BLAST method based on user input.
+
+    This function retrieves the selected method (blastp, blastn, or blastx), the input
+    files, and various parameters from the UI, then executes the appropriate BLAST function. 
+    It also updates the progress bar to reflect the execution status and shows the total 
+    execution time in the console.
+    """
     method = method_var.get()
     query = query_file_label.cget("text")
     database = db_file_label.cget("text")
