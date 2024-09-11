@@ -2,8 +2,83 @@ import math
 import numpy as np
 from Bio import SeqIO
 from Bio.SubsMat import MatrixInfo
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
 import concurrent.futures
 import time
+from Bio.Blast.Applications import NcbiblastnCommandline
+from Bio.Blast import NCBIXML
+import getopt
+import sys
+
+
+def parse_arguments():
+    """
+    Parse command-line arguments.
+
+    This function parses the command-line arguments provided to the script and extracts the values for various parameters.
+
+    Returns:
+    --------
+    tuple
+        A tuple containing all the parsed arguments needed for the program:
+        - method : str : Method to run (blastp, blastn, blastx)
+        - query : str : Path to the query sequence file
+        - database : str : Path to the database sequence file
+        - output : str : Path to the output file
+        - e_value_threshold : float : E-value threshold for BLAST
+        - outfmt : int : Output format for BLAST
+        - k : int : K-mer length for custom blastp
+        - max_distance : int : Max distance for double hits in blastp
+        - bit_score_threshold : float : Bit score threshold for custom blastp
+        - num_threads : int : Number of threads for parallel processing
+    """
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "m:q:d:o:e:f:k:w:b:t:", 
+                                   ["method=", "query=", "database=", "output=", "e_value_threshold=", "outfmt=", 
+                                    "k=", "max_distance=", "bit_score_threshold=", "threads="])
+        
+        # Initialisation des valeurs par défaut
+        method = query = database = output = None
+        e_value_threshold = 0.001
+        outfmt = 6
+        k = 3
+        max_distance = 10
+        bit_score_threshold = 22
+        num_threads = 4
+
+        for opt, arg in opts:
+            if opt in ("-m", "--method"):
+                method = arg
+            elif opt in ("-q", "--query"):
+                query = arg
+            elif opt in ("-d", "--database"):
+                database = arg
+            elif opt in ("-o", "--output"):
+                output = arg
+            elif opt in ("-e", "--e_value_threshold"):
+                e_value_threshold = float(arg)
+            elif opt in ("-f", "--outfmt"):
+                outfmt = int(arg)
+            elif opt in ("-k", "--k"):
+                k = int(arg)
+            elif opt in ("-w", "--max_distance"):
+                max_distance = int(arg)
+            elif opt in ("-b", "--bit_score_threshold"):
+                bit_score_threshold = float(arg)
+            elif opt in ("-t", "--threads"):
+                num_threads = int(arg)
+
+        if not method or not query or not database or not output:
+            print("Missing required arguments. Please specify method, query, database, and output.")
+            sys.exit(1)
+
+        return (method, query, database, output, e_value_threshold, outfmt, k, max_distance, bit_score_threshold, num_threads)
+
+    except getopt.GetoptError as err:
+        print(f"Error parsing arguments: {err}")
+        sys.exit(1)
+
 
 # Function to obtain the BLOSUM62 score for a pair of amino acids
 def get_blosum62_score(a, b, blosum_matrix):
@@ -138,7 +213,7 @@ def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
 
 # Extend a double-hit with gapped alignment
 def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
-                     gap_open_penalty=-11, gap_extension_penalty=-2, X_g=10000):
+                     gap_open_penalty=-11, gap_extension_penalty=-2, X_g=1000000):
     """
     Extends a double-hit into an alignment, using Smith-Waterman for local alignment with gap handling.
     The extension is stopped if the score drops more than X_g below the best score.
@@ -182,6 +257,7 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
 
             # Calculate best score for the current cell
             current_score = max(0, match, gap_query, gap_target)
+
             current_row[j] = current_score
 
             # Update traceback matrix
@@ -353,7 +429,7 @@ def calculate_e_values(alignments, seq_query, len_database):
     return e_values
 
 # Filter alignments by E-value
-def filter_by_e_value(e_values, threshold=0.01):
+def filter_by_e_value(e_values, e_value_threshold):
     """
     Filters alignments based on an E-value threshold.
 
@@ -364,7 +440,7 @@ def filter_by_e_value(e_values, threshold=0.01):
     Returns:
         list: List of significant alignments with E-value below the threshold.
     """
-    filtered_alignments = [align for align in e_values if align[0] <= threshold]
+    filtered_alignments = [align for align in e_values if align[0] <= e_value_threshold]
     return filtered_alignments
 
 # Function to format the alignment for BLAST-like display
@@ -402,7 +478,7 @@ def format_alignment(seq_query, seq_target, alignment):
     return query_str, match_str, target_str
 
 # Display formatted alignment results
-def display_blast_like_results(alignments, e_values, seq_query, seq_target):
+def display_blast_like_results(alignments, e_values, seq_query, seq_target, output_file):
     """
     Displays the alignment results in a BLAST-like format, including score, E-value, identities, positives, and gaps.
 
@@ -411,52 +487,96 @@ def display_blast_like_results(alignments, e_values, seq_query, seq_target):
         e_values (list): List of E-values associated with the alignments.
         seq_query (str): The query sequence.
         seq_target (str): The target sequence.
+        output_file (str): Path to the output file where the results will be written.
     """
     # Parameters for formatting
     line_length = 60  # Number of characters per line in the alignment display
 
-    print(f"{len(e_values)} significant alignments found:\n")
+    with open(output_file, "a") as out_f:
+        out_f.write(f"{len(e_values)} significant alignments found:\n\n")
+        
+        for i, (e_value, raw_score, alignment) in enumerate(e_values, 1):
+            bit_score = calculate_bit_score(raw_score)
+            query_str, match_str, target_str = format_alignment(seq_query, seq_target, alignment)
+
+            # Calculate identities, positives, and gaps
+            identities = sum(1 for q, t in alignment if q == t)
+            positives = sum(1 for q, t in alignment if get_blosum62_score(q, t, MatrixInfo.blosum62) > 0)
+            gaps = sum(1 for q, t in alignment if q == '-' or t == '-')
+
+            # Calculate the percentages
+            total_length = len(alignment)
+            identity_percentage = (identities / total_length) * 100
+            positive_percentage = (positives / total_length) * 100
+            gap_percentage = (gaps / total_length) * 100
+
+            # Write summary information
+            out_f.write(f"Alignment {i}:\n")
+            out_f.write(f" Score = {raw_score}, bits=({bit_score:.2f}), Expect = {e_value:.2e}\n")
+            out_f.write(f" Identities = {identities}/{total_length} ({identity_percentage:.0f}%), "
+                        f"Positives = {positives}/{total_length} ({positive_percentage:.0f}%), "
+                        f"Gaps = {gaps}/{total_length} ({gap_percentage:.0f}%)\n\n")
+
+            # Write alignment block by block
+            for block_start in range(0, total_length, line_length):
+                block_end = block_start + line_length
+                query_block = query_str[block_start:block_end]
+                match_block = match_str[block_start:block_end]
+                target_block = target_str[block_start:block_end]
+
+                query_label = f"Query {block_start + 1}".ljust(9)
+                target_label = f"Sbjct {block_start + 1}".ljust(9)
+                
+                out_f.write(f"{query_label} {query_block}\n")
+                out_f.write(f"{''.ljust(9)} {match_block}\n")
+                out_f.write(f"{target_label} {target_block}\n\n")
+
+            out_f.write("\n" + "-"*50 + "\n\n")
+
+def sort_output_file(output_file):
+    """
+    Reads the output file, sorts the alignments by E-value, and rewrites the sorted results back to the file.
     
-    for i, (e_value, raw_score, alignment) in enumerate(e_values, 1):
-        bit_score = calculate_bit_score(raw_score)
-        query_str, match_str, target_str = format_alignment(seq_query, seq_target, alignment)
+    Args:
+        output_file (str): Path to the BLAST output file to be sorted.
+    """
+    with open(output_file, "r") as f:
+        lines = f.readlines()
 
-        # Calculate identities, positives, and gaps
-        identities = sum(1 for q, t in alignment if q == t)
-        positives = sum(1 for q, t in alignment if get_blosum62_score(q, t, blosum62) > 0)
-        gaps = sum(1 for q, t in alignment if q == '-' or t == '-')
+    # Placeholder for storing the alignments
+    alignments = []
+    current_alignment = []
 
-        # Calculate the percentages
-        total_length = len(alignment)
-        identity_percentage = (identities / total_length) * 100
-        positive_percentage = (positives / total_length) * 100
-        gap_percentage = (gaps / total_length) * 100
+    # Parse the file and collect alignments
+    for line in lines:
+        if line.startswith("Alignment"):  # New alignment block
+            if current_alignment:  # If there's an existing alignment, save it
+                alignments.append(current_alignment)
+            current_alignment = [line]  # Start a new alignment
+        else:
+            current_alignment.append(line)  # Append lines to the current alignment
+    
+    if current_alignment:  # Don't forget the last alignment
+        alignments.append(current_alignment)
 
-        # Display summary information
-        print(f"Alignment {i}:")
-        print(f" Score = {raw_score}, bits=({bit_score:.2f}), Expect = {e_value:.2e}")
-        print(f" Identities = {identities}/{total_length} ({identity_percentage:.0f}%), "
-              f"Positives = {positives}/{total_length} ({positive_percentage:.0f}%), "
-              f"Gaps = {gaps}/{total_length} ({gap_percentage:.0f}%)")
-        print("\n")
+    # Sort alignments by the E-value, ensuring that we only sort those that have an "Expect =" line
+    def extract_evalue(alignment):
+        for line in alignment:
+            if "Expect" in line:
+                try:
+                    evalue_str = line.split('=')[-1].strip()
+                    return float(evalue_str.replace("e", "E"))
+                except ValueError:
+                    return float('inf')  # If we can't parse, assume a very high E-value
+        return float('inf')  # If no E-value found, assume a very high E-value
 
-        # Display alignment block by block
-        for block_start in range(0, total_length, line_length):
-            block_end = block_start + line_length
-            query_block = query_str[block_start:block_end]
-            match_block = match_str[block_start:block_end]
-            target_block = target_str[block_start:block_end]
+    # Sort alignments by the extracted E-value (from smallest to largest E-value)
+    alignments.sort(key=extract_evalue)
 
-            query_label = f"Query {block_start + 1}".ljust(9)
-            target_label = f"Sbjct {block_start + 1}".ljust(9)
-            
-            print(f"{query_label} {query_block}")
-            print(f"{''.ljust(9)} {match_block}")
-            print(f"{target_label} {target_block}")
-            print()
-
-        print("\n" + "-"*50 + "\n")
-
+    # Rewrite the sorted alignments back to the file
+    with open(output_file, "w") as f:
+        for alignment in alignments:
+            f.writelines(alignment)
 # Function to load FASTA database
 def load_fasta_database(fasta_file):
     """
@@ -473,7 +593,7 @@ def load_fasta_database(fasta_file):
         sequences.append(str(record.seq))
     return sequences
 
-def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database):
+def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, output_file):
     """Function to align one target sequence to the query."""
     # Extract k-mers
     kmers = extract_kmers(seq_query, k)
@@ -487,20 +607,20 @@ def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_t
     e_values = calculate_e_values(alignments, seq_query, len_database)
     
     # Filter based on E-value
-    significant_alignments = filter_by_e_value(e_values, threshold=0.00001)
+    significant_alignments = filter_by_e_value(e_values, e_value_threshold)
     
     if significant_alignments:
         return alignments, e_values
     return None
 
-def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads):
+def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output_file):
     """Run alignment in parallel using multiple processes."""
     len_database = sum(len(seq) for seq in database_sequences)
     
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
         # Submit tasks for parallel processing
         future_to_sequence = {
-            executor.submit(align_sequence, seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database): seq_target
+            executor.submit(align_sequence, seq_target, seq_query, k, max_distance, blosum62, bit_score_threshold, len_database, e_value_threshold): seq_target
             for seq_target in database_sequences
         }
 
@@ -510,32 +630,108 @@ def run_parallel_alignments(seq_query, database_sequences, k, max_distance, blos
                 result = future.result()
                 if result:
                     alignments, e_values = result
-                    display_blast_like_results(alignments, e_values, seq_query, seq_target)
+                    display_blast_like_results(alignments, e_values, seq_query, seq_target, output_file)
             except Exception as exc:
                 print(f"Generated an exception for {seq_target}: {exc}")
 
+def load_query_sequence(fasta_file):
+    """
+    Load a query sequence from a FASTA file.
+
+    Args:
+        fasta_file (str): Path to the FASTA file containing the query sequence.
+
+    Returns:
+        str: The query nucleotide sequence.
+    """
+    # Lire le fichier FASTA et renvoyer la première séquence
+    record = next(SeqIO.parse(fasta_file, "fasta"))
+    return str(record.seq)
+
+def run_blastx(query_fasta, protein_db, output_file, e_value_threshold=0.001, outfmt=6):
+    """
+    Run BLASTX using a nucleotide query against a protein database.
+
+    Args:
+        query_fasta (str): Path to the nucleotide query FASTA file.
+        protein_db (str): Path to the protein database for BLASTX.
+        output_file (str): Path to save BLASTX results.
+        e_value_threshold (float): E-value threshold for filtering results.
+        outfmt (int): Output format for BLAST results (default is 6, tabular).
+    """
+    # Create BLASTX command
+    blastx_cline = NcbiblastxCommandline(query=query_fasta, db=protein_db, evalue=e_value_threshold, outfmt=outfmt, out=output_file)
+    print(f"Running BLASTX command: {blastx_cline}")
+    stdout, stderr = blastx_cline()
+
+def run_blastn(query_fasta, nucleotide_db, output_file, e_value_threshold=0.001, outfmt=6):
+    """
+    Run BLASTN using a nucleotide query against a nucleotide database.
+
+    Args:
+        query_fasta (str): Path to the nucleotide query FASTA file.
+        nucleotide_db (str): Path to the nucleotide database for BLASTN.
+        output_file (str): Path to save BLASTN results.
+        e_value_threshold (float): E-value threshold for filtering results.
+        outfmt (int): Output format for BLAST results (default is 6, tabular).
+    """
+    # Create BLASTN command
+    blastn_cline = NcbiblastnCommandline(query=query_fasta, db=nucleotide_db, evalue=e_value_threshold, outfmt=outfmt, out=output_file)
+    print(f"Running BLASTN command: {blastn_cline}")
+    stdout, stderr = blastn_cline()
+
+def parse_blast_results(blast_xml_file):
+    """
+    Parse BLAST XML results and print alignments.
+
+    Args:
+        blast_xml_file (str): Path to BLAST XML results file.
+    """
+    with open(blast_xml_file) as result_handle:
+        blast_records = NCBIXML.parse(result_handle)
+        for blast_record in blast_records:
+            for alignment in blast_record.alignments:
+                for hsp in alignment.hsps:
+                    print(f"****Alignment****")
+                    print(f"sequence: {alignment.title}")
+                    print(f"length: {alignment.length}")
+                    print(f"e-value: {hsp.expect}")
+                    print(hsp.query[0:75] + "...")
+                    print(hsp.match[0:75] + "...")
+                    print(hsp.sbjct[0:75] + "...\n")
+
 # Example usage with FASTA database
+
 if __name__ == "__main__":
+    # Récupérer les arguments de ligne de commande
+    (method, query, database, output, e_value_threshold, outfmt, k, max_distance, bit_score_threshold, num_threads) = parse_arguments()
+
+    # Chronométrage de l'exécution
     start = time.time()
 
-    seq_query = "MGRLDGKVIILTAAAQGIGQAAALAFAREGAKVIATDINESKLQELEKYPGIQTRVLDVTKKKQIDQFANEVERLDVLFNVAGFVHHGTVLDCEEKDWDFSMNLNVRSMYLMIKAFLPKMLAQKSGNIINMSSVASSVKGVVNRCVYSTTKAAVIGLTKSVAADFIQQGIRCNCVCPGTVDTPSLQERIQARGNPEEARNDFLKRQKTGRFATAEEIAMLCVYLASDESAYVTGNPVIIDGGWSL"
-    #seq_query = "ADEPILVA"
-    blosum62 = MatrixInfo.blosum62
+    if method == "blastp":
+        # Charger la séquence de requête et de la base de données
+        seq_query = load_query_sequence(query)
+        database_sequences = load_fasta_database(database)
+        
+        # Charger la matrice BLOSUM62
+        blosum62 = MatrixInfo.blosum62
 
-    k = 3
-    max_distance = 40
-    bit_score_threshold = 22  # Seuil basé sur le bit score
-    num_threads = 6  # Nombre de threads
+        # Exécution de l'algorithme personnalisé BLASTP en parallèle
+        run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output)
+        sort_output_file(output)
 
-    
-    fasta_file = "subset_2000_sequences.fasta"
-    database_sequences = load_fasta_database(fasta_file)
-    #database_sequences = ["MDKVCAVFGGSRGIGRAVAQLMARKGYRLAVIARNLEGAKAAAGDLGGDHLAFSCDVAKEHDVQNTFEELEKHLGRVNFLVNAAGINRDGLLVRTKTEDMVSQLHTNLLGSMLTCKAAMRTMIQQQGGSIVNVGSIVGLKGNSGQSVYSASKGGLVGFSRALAKEVARKKIRVNVVAPGFVHTDMTKDLKEEHLKKNIPLGRFGETIEVAHAVVFLLESPYITGHVLVVDGGLQLIL"]
-    #database_sequences = ["MGRLDGKVIILTAAAQGIGQAAALAFAREGAKVIATDINESKLQELEKYPGIQTRVLDVTKKKQIDQFANEVERLDVLFNVAGFVHHGTVLDCEEKDWDFSMNLNVRSMYLMIKAFLPKMLAQKSGNIINMSSVASSVKGVVNRCVYSTTKAAVIGLTKSVAADFIQQGIRCNCVCPGTVDTPSLQERIQARGNPEEARNDFLKRQKTGRFATAEEIAMLCVYLASDESAYVTGNPVIIDGGWSL"]
-    #database_sequences = ["ADEPILVA"]
+    elif method == "blastx":
+        # Exécution de BLASTX avec Biopython
+        run_blastx(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
 
-    # Run alignments in parallel with specified number of threads
-    run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads)
+    elif method == "blastn":
+        # Exécution de BLASTN avec Biopython
+        run_blastn(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
 
+    else:
+        print(f"Unknown method: {method}. Please choose from 'blastp', 'blastx', or 'blastn'.")
+
+    # Fin du chronomètre
     end = time.time()
-    print(f"Temps total pour {num_threads} coeurs = {end - start} sec")
+    print(f"Execution time for {method} = {end - start} seconds")
