@@ -1,9 +1,10 @@
 """
 Filename: blast_python.py
-Description: This script implements a custom version of BLASTP, and utilizes Biopython 
-             for running BLASTX and BLASTN. The custom BLASTP algorithm includes k-mer extraction, 
-             diagonal double-hit detection, and gapped alignment extension. BLASTX and BLASTN 
-             functionalities leverage Biopython's integration with the BLAST+ command line tools.
+Description: This script implements a custom BLASTP algorithm along with options to run BLASTX and BLASTN
+             using Biopython's integration with the BLAST+ command line tools. The custom BLASTP algorithm 
+             includes k-mer extraction, double-hit detection, and gapped alignment extension. The GUI 
+             version enables users to configure and run BLAST from a graphical interface, while the CLI 
+             version allows command-line execution.
 
 Author: SERRALTA Theo
 Date: 11/11/2024
@@ -12,28 +13,34 @@ Dependencies:
     - Python 3.x
     - Biopython 1.78 (e.g., `pip install biopython==1.78`)
     - Numpy (e.g., `pip install numpy`)
+    - Tkinter (for GUI support, included in standard Python libraries)
 
     I recommend using my Conda environment available on the project's GIT.
 
 Usage:
-    To run the custom BLASTP algorithm:
-        $ python blast_python.py -m blastp -q query.fasta -d database.fasta -o output.txt
+    You can choose to run the script in two modes: GUI or CLI.
+
+    To run the program in GUI mode:
+        $ python blast_python.py GUI
+
+    To run the program in CLI mode with a custom BLASTP algorithm:
+        $ python blast_python.py CLI -m blastp -q query.fasta -d database.fasta -o output.txt
     
-    To run BLASTN with a query file and a nucleotide database (using Biopython):
-        $ python blast_python.py -m blastn -q query.fasta -d database.fasta -o output.txt
+    To run BLASTN (using Biopython's BLAST+ integration):
+        $ python blast_python.py CLI -m blastn -q query.fasta -d database.fasta -o output.txt
     
-    To run BLASTX with a query file and a protein database (using Biopython):
-        $ python blast_python.py -m blastx -q query.fasta -d database.fasta -o output.txt
+    To run BLASTX (using Biopython's BLAST+ integration):
+        $ python blast_python.py CLI -m blastx -q query.fasta -d database.fasta -o output.txt
     
-    Arguments:
+    Arguments (for CLI mode):
         -m, --method         : The BLAST method to use (blastp, blastn, blastx).
         -q, --query          : Path to the query sequence file.
         -d, --database       : Path to the database sequence file.
         -o, --output         : Path to the output file.
         -e, --evalue         : E-value threshold (default: 0.001).
         -f, --outfmt         : Output format (default: 6).
-        -k, --k              : K-mer length for the custom BLASTP.
-        -w, --max_distance   : Maximum distance for double hits in the custom BLASTP.
+        -k, --k              : K-mer length for the custom BLASTP algorithm.
+        -w, --max_distance   : Maximum distance for double-hit detection in the custom BLASTP.
         -b, --bit_score_threshold : Bit score threshold for the custom BLASTP.
         -t, --threads        : Number of threads for parallel processing.
 
@@ -41,94 +48,58 @@ License:
     MIT license
 """
 
+import argparse
 import os
 import math
 import sys
 import time
+import threading
 import tkinter as tk
 from tkinter import filedialog, simpledialog, ttk
-import getopt
 import concurrent.futures
 import numpy as np
-import threading
 from Bio import SeqIO
 from Bio.SubsMat import MatrixInfo
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from Bio.Blast.Applications import NcbiblastnCommandline
+from Bio.Blast.Applications import NcbiblastnCommandline, NcbiblastxCommandline
 from Bio.Blast import NCBIXML
 
 
 def parse_arguments():
     """
-    Parse command-line arguments.
-
-    This function parses the command-line arguments provided to the script and extracts the values for various parameters.
+    Parse command-line arguments for the CLI mode.
 
     Returns:
-    --------
-    tuple
-        Returns a tuple containing:
-        - method : str : The method to use (blastp, blastn, blastx)
-        - query : str : The query sequence file path
-        - database : str : The database file path
-        - output : str : The output file path
-        - e_value_threshold : float : The E-value threshold for filtering alignments
-        - outfmt : int : The output format (default is 6)
-        - k : int : K-mer size for custom blastp
-        - max_distance : int : Maximum distance between k-mer hits for double-hit detection
-        - bit_score_threshold : float : Threshold for filtering alignments based on the bit score
-        - num_threads : int : Number of threads for parallel execution
+        Namespace: A namespace containing the parsed arguments as attributes.
+        The attributes include:
+        - method (str): The BLAST method to use (blastp, blastn, blastx).
+        - query (str): The path to the query sequence file.
+        - database (str): The path to the database sequence file.
+        - output (str): The path to save the output file.
+        - e_value_threshold (float): The E-value threshold for filtering results.
+        - outfmt (int): The output format (default is 6).
+        - k (int): K-mer length for the custom BLASTP algorithm (default is 3).
+        - max_distance (int): Maximum distance for double-hit detection (default is 10).
+        - bit_score_threshold (float): The bit score threshold for filtering alignments (default is 22).
+        - threads (int): The number of threads for parallel processing (default is 4).
     """
-    try:
-        # Extracting command-line options and arguments
-        opts, args = getopt.getopt(sys.argv[1:], "m:q:d:o:e:f:k:w:b:t:", 
-                                   ["method=", "query=", "database=", "output=", "e_value_threshold=", "outfmt=", 
-                                    "k=", "max_distance=", "bit_score_threshold=", "threads="])
-        
-        # Initializing default values for all parameters
-        method = query = database = output = None
-        e_value_threshold = 0.001
-        outfmt = 6
-        k = 3
-        max_distance = 10
-        bit_score_threshold = 22
-        num_threads = 4
+    parser = argparse.ArgumentParser(description="Run BLAST algorithm in CLI mode.")
 
-        # Parsing the provided arguments and updating the corresponding variables
-        for opt, arg in opts:
-            if opt in ("-m", "--method"):
-                method = arg  # BLAST method to use (blastp, blastn, or blastx)
-            elif opt in ("-q", "--query"):
-                query = arg  # Path to query sequence file
-            elif opt in ("-d", "--database"):
-                database = arg  # Path to the database file
-            elif opt in ("-o", "--output"):
-                output = arg  # Path to the output file
-            elif opt in ("-e", "--e_value_threshold"):
-                e_value_threshold = float(arg)  # E-value threshold for filtering results
-            elif opt in ("-f", "--outfmt"):
-                outfmt = int(arg)  # Output format (default: 6)
-            elif opt in ("-k", "--k"):
-                k = int(arg)  # K-mer length for custom BLASTP algorithm
-            elif opt in ("-w", "--max_distance"):
-                max_distance = int(arg)  # Maximum distance for double-hit detection
-            elif opt in ("-b", "--bit_score_threshold"):
-                bit_score_threshold = float(arg)  # Bit score threshold for filtering alignments
-            elif opt in ("-t", "--threads"):
-                num_threads = int(arg)  # Number of threads for parallel execution
+    # Add the required CLI arguments
+    parser.add_argument("-m", "--method", required=True, help="The BLAST method to use (blastp, blastn, blastx)")
+    parser.add_argument("-q", "--query", required=True, help="Path to the query sequence file.")
+    parser.add_argument("-d", "--database", required=True, help="Path to the database sequence file.")
+    parser.add_argument("-o", "--output", required=True, help="Path to save the output file.")
+    parser.add_argument("-e", "--e_value_threshold", type=float, default=0.001, help="E-value threshold for filtering results.")
+    parser.add_argument("-f", "--outfmt", type=int, default=6, help="Output format (default: 6).")
+    parser.add_argument("-k", "--k", type=int, default=3, help="K-mer length for the custom BLASTP.")
+    parser.add_argument("-w", "--max_distance", type=int, default=10, help="Maximum distance for double-hit detection.")
+    parser.add_argument("-b", "--bit_score_threshold", type=float, default=22, help="Bit score threshold.")
+    parser.add_argument("-t", "--threads", type=int, default=4, help="Number of threads for parallel processing.")
 
-        # Checking if essential arguments are missing
-        if not method or not query or not database or not output:
-            print("Missing required arguments. Please specify method, query, database, and output.")
-            sys.exit(1)
-
-        return (method, query, database, output, e_value_threshold, outfmt, k, max_distance, bit_score_threshold, num_threads)
-
-    except getopt.GetoptError as err:
-        # Handling any errors during argument parsing and printing the error message
-        print(f"Error parsing arguments: {err}")
-        sys.exit(1)
+    # Parse the arguments from the command line
+    return parser.parse_args()
 
 #Function to load query sequence fasta
 def load_query_sequence(fasta_file):
@@ -869,20 +840,35 @@ def align_sequence(seq_target, seq_query, k, max_distance, blosum62, bit_score_t
 
 
 def browse_file(label):
-    """Open a file dialog to select a file."""
-    filename = filedialog.askopenfilename()
-    label.config(text=filename)
+    """
+    Open a file dialog to select a file and display the file path.
+
+    Args:
+        label (tk.Label): Label widget to update with the selected file path.
+    """
+    filename = filedialog.askopenfilename()  # Open file dialog
+    label.config(text=filename)  # Update the label with the selected file path
     return filename
 
 def ask_db_name_blastx(label):
-    """Ask for the database name for BLASTX."""
+    """
+    Ask the user to input the database name for BLASTX.
+
+    Args:
+        label (tk.Label): Label widget to update with the entered database name.
+    """
     db_name = simpledialog.askstring("Database Name", "Enter the database name (e.g., 'exemple_db_blastx'):")
     if db_name:
         label.config(text=db_name)
     return db_name
 
 def ask_db_name_blastn(label):
-    """Ask for the database name for BLASTN."""
+    """
+    Ask the user to input the database name for BLASTN.
+
+    Args:
+        label (tk.Label): Label widget to update with the entered database name.
+    """
     db_name = simpledialog.askstring("Database Name", "Enter the database name (e.g., 'exemple_db_blastn'):")
     if db_name:
         label.config(text=db_name)
@@ -890,11 +876,10 @@ def ask_db_name_blastn(label):
 
 def run_blast_thread():
     """
-    Launch BLAST execution in a separate thread to keep the UI responsive.
+    Launch BLAST execution in a separate thread to keep the GUI responsive.
 
-    This function resets the progress bar to 0%, starts its animation, and 
-    spawns a new thread to run the `run_blast()` function, ensuring that the
-    UI remains responsive during the BLAST execution.
+    This function resets the progress bar, starts it, and spawns a new thread
+    to run the `run_blast()` function without blocking the main GUI thread.
     """
     progress_bar['value'] = 0  # Reset progress bar to 0%
     progress_bar.start(10)  # Start progress bar animation
@@ -902,29 +887,167 @@ def run_blast_thread():
 
 def run_blast():
     """
-    Execute the selected BLAST method based on user input.
+    Execute the selected BLAST method based on user input from the GUI.
 
-    This function retrieves the selected method (blastp, blastn, or blastx), the input
-    files, and various parameters from the UI, then executes the appropriate BLAST function. 
-    It also updates the progress bar to reflect the execution status and shows the total 
-    execution time in the console.
+    This function retrieves the user inputs from the GUI, such as the query and database files,
+    and the selected BLAST method, then runs the appropriate BLAST function. It updates the
+    progress bar during the execution.
     """
-    method = method_var.get()
-    query = query_file_label.cget("text")
-    database = db_file_label.cget("text")
-    output = output_entry.get()
-    e_value_threshold = float(evalue_entry.get())
-    outfmt = int(outfmt_entry.get())
-    k = int(k_entry.get())
-    max_distance = int(max_dist_entry.get())
-    bit_score_threshold = float(bit_score_entry.get())
-    num_threads = int(threads_entry.get())
+    method = method_var.get()  # Get the selected BLAST method
+    query = query_file_label.cget("text")  # Get the query file path
+    database = db_file_label.cget("text")  # Get the database file path or name
+    output = output_entry.get()  # Get the output file path
+    e_value_threshold = float(evalue_entry.get())  # Get the E-value threshold
+    outfmt = int(outfmt_entry.get())  # Get the output format
+    k = int(k_entry.get())  # Get the k-mer length
+    max_distance = int(max_dist_entry.get())  # Get the max distance for double-hit detection
+    bit_score_threshold = float(bit_score_entry.get())  # Get the bit score threshold
+    num_threads = int(threads_entry.get())  # Get the number of threads
+
+    start = time.time()  # Start the timer
+
+    # Depending on the selected method, run the appropriate BLAST process
+    if method == "blastp":
+        seq_query = load_query_sequence(query)
+        database_sequences = load_fasta_database(database)
+        blosum62 = MatrixInfo.blosum62  # Load BLOSUM62 matrix for scoring
+        run_parallel_alignments(seq_query, database_sequences, k, max_distance, blosum62, bit_score_threshold, num_threads, e_value_threshold, output)
+        if os.path.exists(output):
+            sort_output_file(output)  # Sort the output file if alignments were found
+        else:
+            print(f"No alignments found. Output file '{output}' not created.")
+    elif method == "blastx":
+        run_blastx(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
+    elif method == "blastn":
+        run_blastn(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
+
+    end = time.time()  # End the timer
+    print(f"Execution time for {method} = {end - start} seconds")  # Print the execution time
+
+    # Update progress bar
+    progress_bar.stop()  # Stop the progress bar animation
+    progress_bar['value'] = 100  # Set progress bar to 100%
+
+def start_gui():
+    """
+    Initialize and display the GUI for BLAST tool configuration.
+
+    This function sets up the graphical interface for configuring BLAST options, 
+    selecting query and database files, and running the BLAST process.
+    """
+    global method_var, query_file_label, db_file_label, output_entry, evalue_entry, outfmt_entry
+    global k_entry, max_dist_entry, bit_score_entry, threads_entry, progress_bar
+
+    # Create the main window
+    root = tk.Tk()
+    root.title("Custom BLAST GUI")
+
+    # BLAST method selection
+    tk.Label(root, text="Method:").grid(row=0, column=0)
+    method_var = tk.StringVar(value="blastp")  # Default to "blastp"
+    tk.OptionMenu(root, method_var, "blastp", "blastn", "blastx").grid(row=0, column=1)
+
+    # Query file selection
+    tk.Label(root, text="Query file:").grid(row=1, column=0)
+    query_file_label = tk.Label(root, text="No file selected", width=40)
+    query_file_label.grid(row=1, column=1)
+    tk.Button(root, text="Browse", command=lambda: browse_file(query_file_label)).grid(row=1, column=2)
+
+    # Database selection
+    tk.Label(root, text="Database:").grid(row=2, column=0)
+    db_file_label = tk.Label(root, text="No database selected", width=40)
+    db_file_label.grid(row=2, column=1)
+    db_button = tk.Button(root, text="Browse", command=lambda: browse_file(db_file_label))
+    db_button.grid(row=2, column=2)
+
+    # Update database selection UI based on method
+    def update_db_selection(*args):
+        method = method_var.get()
+        if method == "blastp":
+            db_button.config(text="Browse", command=lambda: browse_file(db_file_label))
+        elif method == "blastx":
+            db_button.config(text="Enter Name", command=lambda: ask_db_name_blastx(db_file_label))
+        elif method == "blastn":
+            db_button.config(text="Enter Name", command=lambda: ask_db_name_blastn(db_file_label))
+
+    method_var.trace_add("write", update_db_selection)  # Bind method selection to update DB behavior
+
+    # Output file selection
+    tk.Label(root, text="Output file:").grid(row=3, column=0)
+    output_entry = tk.Entry(root, width=40)
+    output_entry.grid(row=3, column=1)
+
+    # E-value threshold input
+    tk.Label(root, text="E-value threshold:").grid(row=4, column=0)
+    evalue_entry = tk.Entry(root, width=10)
+    evalue_entry.grid(row=4, column=1)
+    evalue_entry.insert(0, "0.001")
+
+    # Output format input
+    tk.Label(root, text="Output format:").grid(row=5, column=0)
+    outfmt_entry = tk.Entry(root, width=10)
+    outfmt_entry.grid(row=5, column=1)
+    outfmt_entry.insert(0, "6")
+
+    # K-mer length input
+    tk.Label(root, text="K-mer length:").grid(row=6, column=0)
+    k_entry = tk.Entry(root, width=10)
+    k_entry.grid(row=6, column=1)
+    k_entry.insert(0, "3")
+
+    # Max distance for double-hit detection input
+    tk.Label(root, text="Max distance:").grid(row=7, column=0)
+    max_dist_entry = tk.Entry(root, width=10)
+    max_dist_entry.grid(row=7, column=1)
+    max_dist_entry.insert(0, "10")
+
+    # Bit score threshold input
+    tk.Label(root, text="Bit score threshold:").grid(row=8, column=0)
+    bit_score_entry = tk.Entry(root, width=10)
+    bit_score_entry.grid(row=8, column=1)
+    bit_score_entry.insert(0, "22")
+
+    # Number of threads input
+    tk.Label(root, text="Number of threads:").grid(row=9, column=0)
+    threads_entry = tk.Entry(root, width=10)
+    threads_entry.grid(row=9, column=1)
+    threads_entry.insert(0, "4")
+
+    # Progress bar
+    progress_bar = ttk.Progressbar(root, orient="horizontal", length=300, mode="determinate")
+    progress_bar.grid(row=10, columnspan=3, pady=10)
+
+    # Run button to trigger BLAST
+    tk.Button(root, text="Run BLAST", command=run_blast_thread).grid(row=11, column=1)
+
+    # Start the GUI event loop
+    root.mainloop()
+
+def run_cli():
+    """
+    Execute BLAST based on command-line input.
+
+    This function retrieves the parsed command-line arguments, then runs
+    the appropriate BLAST method (blastp, blastx, or blastn).
+    """
+    # Get parsed arguments
+    args = parse_arguments()
 
     start = time.time()
 
-    # Simulate running a task by setting progress incrementally
-    time.sleep(2)  # Simulate processing
+    # Extract arguments from 'args'
+    method = args.method
+    query = args.query
+    database = args.database
+    output = args.output
+    e_value_threshold = args.e_value_threshold
+    outfmt = args.outfmt
+    k = args.k
+    max_distance = args.max_distance
+    bit_score_threshold = args.bit_score_threshold
+    num_threads = args.threads
 
+    # Run the appropriate BLAST method
     if method == "blastp":
         seq_query = load_query_sequence(query)
         database_sequences = load_fasta_database(database)
@@ -938,97 +1061,26 @@ def run_blast():
         run_blastx(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
     elif method == "blastn":
         run_blastn(query, database, output, e_value_threshold=e_value_threshold, outfmt=outfmt)
+    else:
+        print(f"Unknown method: {method}. Please choose from 'blastp', 'blastx', or 'blastn'.")
 
     end = time.time()
     print(f"Execution time for {method} = {end - start} seconds")
 
-    # Set the progress bar to 100% when done
-    progress_bar.stop()  # Stop the animation
-    progress_bar['value'] = 100  # Fill the progress bar completely
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        # Check if the first argument is "GUI" or "CLI"
+        mode = sys.argv[1].upper()
 
-
-# Initialize the GUI window (use only one instance of tk.Tk())
-root = tk.Tk()
-root.title("Custom BLAST GUI")
-
-# Method selection
-tk.Label(root, text="Method:").grid(row=0, column=0)
-method_var = tk.StringVar(value="blastp")
-tk.OptionMenu(root, method_var, "blastp", "blastn", "blastx").grid(row=0, column=1)
-
-# Query file selection
-tk.Label(root, text="Query file:").grid(row=1, column=0)
-query_file_label = tk.Label(root, text="No file selected", width=40)
-query_file_label.grid(row=1, column=1)
-tk.Button(root, text="Browse", command=lambda: browse_file(query_file_label)).grid(row=1, column=2)
-
-# Database selection
-tk.Label(root, text="Database:").grid(row=2, column=0)
-db_file_label = tk.Label(root, text="No database selected", width=40)
-db_file_label.grid(row=2, column=1)
-db_button = tk.Button(root, text="Browse", command=lambda: browse_file(db_file_label))
-db_button.grid(row=2, column=2)
-
-# Function to update database selection UI based on method
-def update_db_selection(*args):
-    method = method_var.get()
-    if method == "blastp":
-        db_button.config(text="Browse", command=lambda: browse_file(db_file_label))
-    elif method == "blastx":
-        db_button.config(text="Enter Name", command=lambda: ask_db_name_blastx(db_file_label))
-    elif method == "blastn":
-        db_button.config(text="Enter Name", command=lambda: ask_db_name_blastn(db_file_label))
-
-# Bind method selection to update the database selection behavior
-method_var.trace_add("write", update_db_selection)
-
-# Output file
-tk.Label(root, text="Output file:").grid(row=3, column=0)
-output_entry = tk.Entry(root, width=40)
-output_entry.grid(row=3, column=1)
-
-# E-value threshold
-tk.Label(root, text="E-value threshold:").grid(row=4, column=0)
-evalue_entry = tk.Entry(root, width=10)
-evalue_entry.grid(row=4, column=1)
-evalue_entry.insert(0, "0.001")
-
-# Output format
-tk.Label(root, text="Output format:").grid(row=5, column=0)
-outfmt_entry = tk.Entry(root, width=10)
-outfmt_entry.grid(row=5, column=1)
-outfmt_entry.insert(0, "6")
-
-# K-mer length
-tk.Label(root, text="K-mer length:").grid(row=6, column=0)
-k_entry = tk.Entry(root, width=10)
-k_entry.grid(row=6, column=1)
-k_entry.insert(0, "3")
-
-# Maximum distance for double-hit detection
-tk.Label(root, text="Max distance:").grid(row=7, column=0)
-max_dist_entry = tk.Entry(root, width=10)
-max_dist_entry.grid(row=7, column=1)
-max_dist_entry.insert(0, "10")
-
-# Bit score threshold
-tk.Label(root, text="Bit score threshold:").grid(row=8, column=0)
-bit_score_entry = tk.Entry(root, width=10)
-bit_score_entry.grid(row=8, column=1)
-bit_score_entry.insert(0, "22")
-
-# Number of threads
-tk.Label(root, text="Number of threads:").grid(row=9, column=0)
-threads_entry = tk.Entry(root, width=10)
-threads_entry.grid(row=9, column=1)
-threads_entry.insert(0, "4")
-
-# Progress bar
-progress_bar = ttk.Progressbar(root, orient="horizontal", length=300, mode="determinate")
-progress_bar.grid(row=10, columnspan=3, pady=10)
-
-# Run button
-tk.Button(root, text="Run BLAST", command=run_blast_thread).grid(row=11, column=1)
-
-# Start the GUI event loop
-root.mainloop()
+        if mode == "GUI":
+            # Remove "GUI" from sys.argv and start the graphical interface
+            sys.argv.pop(1)
+            start_gui()
+        elif mode == "CLI":
+            # Remove "CLI" from sys.argv and parse the rest of the arguments for CLI
+            sys.argv.pop(1)
+            run_cli()  # Call the function to handle CLI logic
+        else:
+            print("Usage: python blast_python.py [GUI|CLI]")
+    else:
+        print("Usage: python blast_python.py [GUI|CLI]")
