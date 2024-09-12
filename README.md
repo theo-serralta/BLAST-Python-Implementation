@@ -99,7 +99,7 @@ python blast_python.py CLI -m blastx -q query.fasta -d database.fasta -o output.
 A `test_blast_python.py` file is available in the `tests/` directory to validate functionality. Run it using:
 
 ```bash
-pytest tests/test_blast_python.py
+python -m unittest discover -s tests
 ```
 
 ## License:
