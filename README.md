@@ -1,82 +1,106 @@
 
 # BLAST-Python-Implementation
 
-**BLAST-Python-Implementation** is a Python-based implementation of the Basic Local Alignment Search Tool (BLAST), designed for a Master's 2 Bioinformatics project at **Université Paris-Cité**. This tool facilitates searching for sequence similarity within a sequence database. It supports parallelization for improved speed and efficiency and provides results comparable to BLAST+, the C implementation.
+BLAST-Python-Implementation is a Python implementation of the Basic Local Alignment Search Tool (BLAST) for a Master's 2 project in Bioinformatics at Université Paris-Cité. The program enables the search for similar sequences within a sequence database using a custom BLASTP algorithm, as well as integration with BLASTN and BLASTX through Biopython. It is open-source and available under the MIT license.
 
-## Features
+## Project Overview
 
-- **K-mer extraction and indexing**: Efficient k-mer-based sequence search.
-- **Double-hit detection**: Identifies hits between sequences on the same diagonal.
-- **Smith-Waterman local alignment**: Extends alignments with scoring matrices and gap penalties.
-- **BLOSUM62 scoring**: Implements substitution matrix scoring for alignments.
-- **Parallel execution**: Supports multi-core CPU parallelism for faster sequence searching.
-- **E-value calculation**: Estimates statistical significance of sequence alignments.
-- **Tested and validated**: Compares results with BLAST+ using statistical tests (Mann-Whitney).
+This project implements a custom BLASTP algorithm along with options to run BLASTX and BLASTN using Biopython's integration with the BLAST+ command line tools. The custom BLASTP algorithm includes:
+- **K-mer extraction**
+- **Double-hit detection**
+- **Gapped alignment extension**
 
-## Prerequisites
+Additionally, a GUI version is provided for ease of use, allowing users to configure and run BLAST from a graphical interface, while the CLI version enables command-line execution.
 
-Make sure you have the following installed before running the project:
+### Filename:
+**blast_python.py**
 
-- **Conda**: A Python environment management tool.
-- **Python 3.8+**: The project is built and tested on Python 3.8 and above.
-- **Biopython**: Used for sequence parsing and BLOSUM matrix handling.
-- **NumPy**: Essential for array and matrix calculations.
+### Description:
+This script implements a custom BLASTP algorithm along with options to run BLASTX and BLASTN using Biopython's integration with the BLAST+ command line tools. The custom BLASTP algorithm includes k-mer extraction, double-hit detection, and gapped alignment extension. The GUI version enables users to configure and run BLAST from a graphical interface, while the CLI version allows command-line execution.
 
-## Download this Repository
+### Author:
+**SERRALTA Theo**
 
-Clone the repository from GitHub:
+### Date:
+**11/11/2024**
+
+### Dependencies:
+- Python 3.x
+- Biopython 1.78 (e.g., `pip install biopython==1.78`)
+- Numpy (e.g., `pip install numpy`)
+- Tkinter (for GUI support, included in standard Python libraries)
+
+For reproducibility, I recommend using the provided Conda environment available on the project's GIT.
+
+## Download this repository
 
 ```bash
 git clone https://github.com/theo-serralta/BLAST-Python-Implementation.git
 cd BLAST-Python-Implementation
 ```
 
-## Install Dependencies
+## Install dependencies
 
-### Conda Environment Setup
+### Conda environment
 
-1. Install [conda](https://docs.conda.io/en/latest/miniconda.html).
-2. Create and activate the environment using the `blast_python.yml` file:
+Install [conda](https://docs.conda.io/en/latest/miniconda.html).
+
+Create the conda environment and install dependencies:
 
 ```bash
-conda env create -f blast_python.yml
+conda env create -f blast_python.yml 
+```
+
+Load the conda environment:
+
+```bash
 conda activate blast_python
 ```
 
-### Manual Dependency Installation
+## Usage:
 
-Alternatively, you can manually install the required packages:
+### You can choose to run the script in two modes: **GUI** or **CLI**.
+
+To run the program in GUI mode:
+```bash
+python blast_python.py GUI
+```
+
+To run the program in CLI mode with the custom BLASTP algorithm:
+```bash
+python blast_python.py CLI -m blastp -q query.fasta -d database.fasta -o output.txt
+```
+
+To run BLASTN (using Biopython's BLAST+ integration):
+```bash
+python blast_python.py CLI -m blastn -q query.fasta -d database.fasta -o output.txt
+```
+
+To run BLASTX (using Biopython's BLAST+ integration):
+```bash
+python blast_python.py CLI -m blastx -q query.fasta -d database.fasta -o output.txt
+```
+
+## Arguments (for CLI mode):
+
+- `-m, --method`: The BLAST method to use (`blastp`, `blastn`, `blastx`).
+- `-q, --query`: Path to the query sequence file.
+- `-d, --database`: Path to the database sequence file.
+- `-o, --output`: Path to the output file.
+- `-e, --evalue`: E-value threshold (default: 0.001).
+- `-f, --outfmt`: Output format (default: 6).
+- `-k, --k`: K-mer length for the custom BLASTP algorithm.
+- `-w, --max_distance`: Maximum distance for double-hit detection in the custom BLASTP.
+- `-b, --bit_score_threshold`: Bit score threshold for the custom BLASTP.
+- `-t, --threads`: Number of threads for parallel processing.
+
+## Testing
+
+A `test_blast_python.py` file is available in the `tests/` directory to validate functionality. Run it using:
 
 ```bash
-conda create -n blast_python python=3.8
-conda activate blast_python
-pip install biopython numpy
+pytest tests/test_blast_python.py
 ```
 
-## Usage
-
-### Running the BLAST Implementation
-
-1. Place your query and target sequences in FASTA format within the appropriate directory.
-2. Use the following command to run the alignment:
-
-```bash
-python src/blast_python.py
-```
-
-3. To change query sequences or database settings, modify the `src/blast_python.py` file, providing the paths to your query and database sequences.
-
-### Example Usage
-
-For example, to align the following query sequence:
-
-```plaintext
->ADEPILVA
-ADEPILVA
-```
-
-With a target sequence database, execute the script as described in the previous steps.
-
-### Parallel Processing
-
-To optimize performance, the program supports multi-core processing. You can adjust the number of threads to improve speed by modifying the relevant parameters in the `blast_python.py` script.
+## License:
+MIT license
