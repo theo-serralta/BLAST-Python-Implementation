@@ -279,7 +279,7 @@ def evaluate_double_hit(kmer1, kmer2, blosum_matrix):
 
 # Extend a double-hit with gapped alignment
 def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix, 
-                     gap_open_penalty=-11, gap_extension_penalty=-2, X_g=1000000):
+                     gap_open_penalty=-11, gap_extension_penalty=-2):
     """
     Extend a double-hit into a full alignment using Smith-Waterman local alignment.
 
@@ -291,7 +291,6 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
         blosum_matrix (dict): The BLOSUM62 substitution matrix.
         gap_open_penalty (int): Penalty for opening a gap in the alignment.
         gap_extension_penalty (int): Penalty for extending a gap.
-        X_g (int): Maximum score drop to stop extension.
     
     Returns:
         tuple: Alignment score and the final alignment.
@@ -336,10 +335,6 @@ def extend_alignment(seq_query, seq_target, query_pos, target_pos, blosum_matrix
             if current_score > max_score:
                 max_score = current_score
                 max_pos = (i, j)
-
-            # Stop the extension if the current score has dropped too much from the maximum score (controlled by X_g)
-            if max_score - current_score > X_g:
-                break
 
         # Swap rows for the next iteration (use current_row for the next previous_row)
         previous_row, current_row = current_row, np.zeros(n + 1)  # Reset the current row for the next iteration
