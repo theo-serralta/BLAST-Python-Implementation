@@ -9,4 +9,5 @@ dependencies:
     - samtools=1.9
     - numpy
     - pandas
-    - Biopython
+    - Biopython=1.78
+    - numba
