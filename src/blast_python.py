@@ -7,7 +7,7 @@ Description: This script implements a custom BLASTP algorithm along with options
              version allows command-line execution.
 
 Author: SERRALTA Theo
-Date: 11/11/2024
+Date: 11/09/2024
 
 Dependencies:
     - Python 3.x
